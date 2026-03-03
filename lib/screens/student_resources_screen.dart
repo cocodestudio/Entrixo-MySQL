@@ -1,12 +1,14 @@
+import 'dart:convert';
 import 'dart:io';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:dio/dio.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:open_file/open_file.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../utils/api_config.dart';
 import '../widgets/geometric_loader.dart';
 import '../utils/custom_toast.dart';
 
@@ -18,32 +20,62 @@ class StudentResourcesScreen extends StatefulWidget {
 }
 
 class _StudentResourcesScreenState extends State<StudentResourcesScreen> {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-
-  Map<String, dynamic>? _studentData;
-  bool _isLoadingProfile = true;
+  List<dynamic> _resources = [];
+  bool _isLoading = true;
+  String _errorMessage = '';
 
   @override
   void initState() {
     super.initState();
-    _fetchStudentProfile();
+    _fetchResources();
   }
 
-  Future<void> _fetchStudentProfile() async {
+  Future<String?> _getToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('auth_token');
+  }
+
+  Future<void> _fetchResources() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = '';
+    });
+
     try {
-      final user = _auth.currentUser;
-      if (user != null) {
-        final doc = await _firestore.collection('users').doc(user.uid).get();
+      final token = await _getToken();
+
+      // Fetching only "Resource" type from the backend
+      final response = await http.get(
+        Uri.parse("${ApiConfig.studentResources}?type=Resource"),
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
         if (mounted) {
           setState(() {
-            _studentData = doc.data();
-            _isLoadingProfile = false;
+            _resources = data['data'] ?? [];
+            _isLoading = false;
+          });
+        }
+      } else {
+        if (mounted) {
+          setState(() {
+            _errorMessage = 'Failed to load resources';
+            _isLoading = false;
           });
         }
       }
     } catch (e) {
-      if (mounted) setState(() => _isLoadingProfile = false);
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'Network Error. Please try again.';
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -89,78 +121,52 @@ class _StudentResourcesScreenState extends State<StudentResourcesScreen> {
           onPressed: () => Navigator.pop(context),
         ),
       ),
-      body: _isLoadingProfile
-          ? Center(child: GeometricLoader(size: 45, isDarkMode: false))
+      body: _isLoading
+          ? const Center(child: GeometricLoader(size: 45, isDarkMode: false))
           : _buildResourceList(theme),
     );
   }
 
   Widget _buildResourceList(ThemeData theme) {
-    final String myCourseId = _studentData?['courseId'] ?? 'UNKNOWN';
-    final String mySemester =
-        _studentData?['currentSemester']?.toString() ?? '1';
-
-    return StreamBuilder<QuerySnapshot>(
-      stream: _firestore
-          .collection('resources')
-          .where('type', isEqualTo: 'Resource')
-          .orderBy('uploadedAt', descending: true)
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.error_outline_rounded,
-                  size: 40,
-                  color: Colors.red.withOpacity(0.5),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  "Unable to load resources",
-                  style: TextStyle(
-                    color: Colors.grey[600],
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
+    if (_errorMessage.isNotEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.error_outline_rounded,
+              size: 40,
+              color: Colors.red.withOpacity(0.5),
             ),
-          );
-        }
+            const SizedBox(height: 12),
+            Text(
+              _errorMessage,
+              style: TextStyle(
+                color: Colors.grey[600],
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextButton.icon(
+              onPressed: _fetchResources,
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text("Retry"),
+            ),
+          ],
+        ),
+      );
+    }
 
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return Center(child: GeometricLoader(size: 40, isDarkMode: false));
-        }
+    if (_resources.isEmpty) {
+      return _buildEmptyState();
+    }
 
-        final docs = snapshot.data!.docs;
-
-        final filteredDocs = docs.where((doc) {
-          final data = doc.data() as Map<String, dynamic>;
-          final String targetCourse = data['courseId'] ?? 'ALL';
-          final String targetSem = data['semester']?.toString() ?? 'ALL';
-
-          final bool courseMatch =
-              targetCourse == 'ALL' || targetCourse == myCourseId;
-          final bool semMatch = targetSem == 'ALL' || targetSem == mySemester;
-
-          return courseMatch && semMatch;
-        }).toList();
-
-        if (filteredDocs.isEmpty) {
-          return _buildEmptyState();
-        }
-
-        return ListView.builder(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-          physics: const BouncingScrollPhysics(),
-          itemCount: filteredDocs.length,
-          itemBuilder: (context, index) {
-            final data = filteredDocs[index].data() as Map<String, dynamic>;
-            return _ResourceCard(data: data, theme: theme);
-          },
-        );
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      physics: const BouncingScrollPhysics(),
+      itemCount: _resources.length,
+      itemBuilder: (context, index) {
+        return _ResourceCard(data: _resources[index], theme: theme);
       },
     );
   }
@@ -179,7 +185,7 @@ class _StudentResourcesScreenState extends State<StudentResourcesScreen> {
                 shape: BoxShape.circle,
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.grey.withOpacity(0.08),
+                    color: Colors.indigo.withOpacity(0.08),
                     blurRadius: 30,
                     offset: const Offset(0, 15),
                   ),
@@ -233,15 +239,17 @@ class _ResourceCardState extends State<_ResourceCard> {
   double _progress = 0.0;
 
   Future<void> _handleAction() async {
-    final String? fileUrl = widget.data['fileUrl'];
+    final String? fileUrl = widget.data['file_url'];
     final String? link = widget.data['link'];
     final String title = widget.data['title'] ?? 'Resource';
-    final String? ext = widget.data['fileExtension'];
+    final String? ext = widget.data['file_extension'];
 
     if (fileUrl != null && fileUrl.isNotEmpty) {
       await _downloadFile(fileUrl, title, ext);
     } else if (link != null && link.isNotEmpty) {
       await _launchURL(link);
+    } else {
+      CustomToast.show(context, "No attachment available", isError: true);
     }
   }
 
@@ -275,8 +283,9 @@ class _ResourceCardState extends State<_ResourceCard> {
       dir = await getExternalStorageDirectory();
     }
 
+    final sanitizedFileName = fileName.replaceAll(RegExp(r'[^\w\s]+'), '');
     final String savePath =
-        "${dir?.path}/${fileName}_${DateTime.now().millisecondsSinceEpoch}.${extension ?? 'pdf'}";
+        "${dir?.path}/${sanitizedFileName}_${DateTime.now().millisecondsSinceEpoch}.${extension ?? 'pdf'}";
 
     setState(() => _isDownloading = true);
 
@@ -333,14 +342,19 @@ class _ResourceCardState extends State<_ResourceCard> {
 
   @override
   Widget build(BuildContext context) {
-    final String? fileUrl = widget.data['fileUrl'];
+    final String? fileUrl = widget.data['file_url'];
     final String? link = widget.data['link'];
-    final String? ext = widget.data['fileExtension'];
-    final Timestamp? date = widget.data['uploadedAt'];
+    final String? ext = widget.data['file_extension'];
+
+    final String rawDate = widget.data['created_at'] ?? '';
+    DateTime? date;
+    if (rawDate.isNotEmpty) {
+      date = DateTime.tryParse(rawDate);
+    }
+
     final bool isLink =
         (fileUrl == null || fileUrl.isEmpty) &&
         (link != null && link.isNotEmpty);
-
     final Color accentColor = isLink ? Colors.blue : _getFileColor(ext);
 
     return Container(
@@ -366,7 +380,6 @@ class _ResourceCardState extends State<_ResourceCard> {
             padding: const EdgeInsets.all(16),
             child: Row(
               children: [
-                // Premium Icon Box
                 SizedBox(
                   width: 56,
                   height: 56,
@@ -395,8 +408,6 @@ class _ResourceCardState extends State<_ResourceCard> {
                   ),
                 ),
                 const SizedBox(width: 16),
-
-                // Content
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -423,7 +434,7 @@ class _ResourceCardState extends State<_ResourceCard> {
                             ),
                             const SizedBox(width: 4),
                             Text(
-                              DateFormat('dd MMM').format(date.toDate()),
+                              DateFormat('dd MMM').format(date),
                               style: TextStyle(
                                 fontSize: 11,
                                 color: Colors.grey[500],
@@ -463,10 +474,7 @@ class _ResourceCardState extends State<_ResourceCard> {
                     ],
                   ),
                 ),
-
                 const SizedBox(width: 12),
-
-                // Action Button
                 Container(
                   width: 40,
                   height: 40,

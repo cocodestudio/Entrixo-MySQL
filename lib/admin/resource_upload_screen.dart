@@ -1,9 +1,11 @@
+import 'dart:convert';
 import 'dart:io';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/api_config.dart';
 import '../widgets/geometric_loader.dart';
 import '../utils/custom_toast.dart';
 
@@ -34,10 +36,77 @@ class _ResourceUploadScreenState extends State<ResourceUploadScreen> {
   bool _isUploading = false;
   double _uploadProgress = 0.0;
 
+  List<dynamic> _coursesList = [];
+  List<dynamic> _resourcesList = [];
+  bool _isLoadingResources = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchCourses();
+    _fetchResources();
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _descController.dispose();
+    _linkController.dispose();
+    _rulesController.dispose();
+    super.dispose();
+  }
+
+  Future<String?> _getToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('auth_token');
+  }
+
   IconData _getTypeIcon(String type) {
     return type == 'Assignment'
         ? Icons.assignment_turned_in_rounded
         : Icons.folder_copy_rounded;
+  }
+
+  Future<void> _fetchCourses() async {
+    try {
+      final token = await _getToken();
+      final response = await http.get(
+        Uri.parse(ApiConfig.courses),
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (mounted) setState(() => _coursesList = data['data'] ?? []);
+      }
+    } catch (e) {
+      debugPrint("Course Fetch Error: $e");
+    }
+  }
+
+  Future<void> _fetchResources() async {
+    setState(() => _isLoadingResources = true);
+    try {
+      final token = await _getToken();
+      final response = await http.get(
+        Uri.parse(ApiConfig.resources),
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (mounted) setState(() => _resourcesList = data['data'] ?? []);
+      }
+    } catch (e) {
+      if (mounted)
+        CustomToast.show(context, "Failed to load files", isError: true);
+    } finally {
+      if (mounted) setState(() => _isLoadingResources = false);
+    }
   }
 
   Future<void> _pickFile() async {
@@ -58,13 +127,12 @@ class _ResourceUploadScreenState extends State<ResourceUploadScreen> {
 
       if (result != null) {
         if (result.files.first.size > 10 * 1024 * 1024) {
-          if (mounted) {
+          if (mounted)
             CustomToast.show(
               context,
               "File too large. Max 10MB allowed.",
               isError: true,
             );
-          }
           return;
         }
         setState(() {
@@ -79,7 +147,7 @@ class _ResourceUploadScreenState extends State<ResourceUploadScreen> {
   Future<void> _uploadAndSave() async {
     if (!_formKey.currentState!.validate()) return;
 
-    if (_pickedFile == null && _linkController.text.isEmpty) {
+    if (_pickedFile == null && _linkController.text.trim().isEmpty) {
       CustomToast.show(
         context,
         "Please attach a file or provide a link",
@@ -88,76 +156,87 @@ class _ResourceUploadScreenState extends State<ResourceUploadScreen> {
       return;
     }
 
-    setState(() => _isUploading = true);
+    setState(() {
+      _isUploading = true;
+      _uploadProgress = 0.3; // Simulate progress start
+    });
 
     try {
-      String? fileUrl;
-      String? fileName;
-      String? fileExtension;
+      final token = await _getToken();
+      var request = http.MultipartRequest(
+        'POST',
+        Uri.parse(ApiConfig.resources),
+      );
 
-      if (_pickedFile != null) {
-        final file = File(_pickedFile!.path!);
-        fileName = _pickedFile!.name;
-        fileExtension = _pickedFile!.extension;
-
-        final storageRef = FirebaseStorage.instance.ref().child(
-          'resources/${_selectedType.toLowerCase()}s/${DateTime.now().millisecondsSinceEpoch}_$fileName',
-        );
-
-        final uploadTask = storageRef.putFile(file);
-
-        uploadTask.snapshotEvents.listen((event) {
-          setState(() {
-            _uploadProgress = event.bytesTransferred / event.totalBytes;
-          });
-        });
-
-        await uploadTask;
-        fileUrl = await storageRef.getDownloadURL();
-      }
-
-      final data = {
-        'type': _selectedType,
-        'title': _titleController.text.trim(),
-        'description': _descController.text.trim(),
-        'link': _linkController.text.trim(),
-        'rules': _rulesController.text.trim(),
-        'fileUrl': fileUrl,
-        'fileName': fileName,
-        'fileExtension': fileExtension,
-        'courseId': _selectedCourseId,
-        'courseName': _selectedCourseName,
-        'semester': _selectedSemester,
-        'uploadedAt': FieldValue.serverTimestamp(),
-        'uploadedBy': 'Admin',
-      };
-
-      await FirebaseFirestore.instance.collection('resources').add(data);
-
-      _titleController.clear();
-      _descController.clear();
-      _linkController.clear();
-      _rulesController.clear();
-      setState(() {
-        _pickedFile = null;
-        _isUploading = false;
-        _uploadProgress = 0.0;
-        _selectedCourseId = 'ALL';
-        _selectedCourseName = 'All Courses';
-        _selectedSemester = 'ALL';
+      request.headers.addAll({
+        'Accept': 'application/json',
+        'Authorization': 'Bearer $token',
       });
 
-      if (mounted)
-        CustomToast.show(context, "$_selectedType uploaded successfully!");
+      request.fields['type'] = _selectedType;
+      request.fields['title'] = _titleController.text.trim();
+      request.fields['description'] = _descController.text.trim();
+      request.fields['link'] = _linkController.text.trim();
+      request.fields['rules'] = _rulesController.text.trim();
+      request.fields['course_id'] = _selectedCourseId;
+      request.fields['course_name'] = _selectedCourseName;
+      request.fields['semester'] = _selectedSemester;
+
+      if (_pickedFile != null) {
+        request.files.add(
+          await http.MultipartFile.fromPath('file', _pickedFile!.path!),
+        );
+      }
+
+      setState(() => _uploadProgress = 0.7); // Mid progress
+
+      var streamedResponse = await request.send();
+      var response = await http.Response.fromStream(streamedResponse);
+
+      setState(() => _uploadProgress = 1.0); // Complete
+
+      if (response.statusCode == 201 || response.statusCode == 200) {
+        _titleController.clear();
+        _descController.clear();
+        _linkController.clear();
+        _rulesController.clear();
+        setState(() {
+          _pickedFile = null;
+          _selectedCourseId = 'ALL';
+          _selectedCourseName = 'All Courses';
+          _selectedSemester = 'ALL';
+        });
+
+        if (mounted) {
+          CustomToast.show(context, "$_selectedType uploaded successfully!");
+          _fetchResources(); // Refresh the list
+          setState(() => _activeTab = 'Manage'); // Switch to manage tab
+        }
+      } else {
+        final errorData = jsonDecode(response.body);
+        if (mounted) {
+          CustomToast.show(
+            context,
+            errorData['message'] ?? "Upload failed",
+            isError: true,
+          );
+        }
+      }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         CustomToast.show(context, "Upload Failed: $e", isError: true);
+      }
     } finally {
-      if (mounted) setState(() => _isUploading = false);
+      if (mounted) {
+        setState(() {
+          _isUploading = false;
+          _uploadProgress = 0.0;
+        });
+      }
     }
   }
 
-  Future<void> _deleteResource(String id, String? fileUrl) async {
+  Future<void> _deleteResource(String id) async {
     bool confirm =
         await showDialog(
           context: context,
@@ -182,15 +261,24 @@ class _ResourceUploadScreenState extends State<ResourceUploadScreen> {
     if (!confirm) return;
 
     try {
-      await FirebaseFirestore.instance.collection('resources').doc(id).delete();
+      final token = await _getToken();
+      final response = await http.delete(
+        Uri.parse("${ApiConfig.resources}/$id"),
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
 
-      if (fileUrl != null && fileUrl.isNotEmpty) {
-        try {
-          await FirebaseStorage.instance.refFromURL(fileUrl).delete();
-        } catch (_) {}
+      if (response.statusCode == 200) {
+        if (mounted) {
+          CustomToast.show(context, "Resource deleted");
+          _fetchResources(); // Refresh list
+        }
+      } else {
+        if (mounted)
+          CustomToast.show(context, "Failed to delete resource", isError: true);
       }
-
-      if (mounted) CustomToast.show(context, "Resource deleted");
     } catch (e) {
       if (mounted) CustomToast.show(context, "Error: $e", isError: true);
     }
@@ -220,62 +308,55 @@ class _ResourceUploadScreenState extends State<ResourceUploadScreen> {
               ),
             ),
             const SizedBox(height: 16),
-            StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection('courses')
-                  .snapshots(),
-              builder: (context, snapshot) {
-                if (!snapshot.hasData) {
-                  return const Center(
+            _coursesList.isEmpty
+                ? const Center(
                     child: Padding(
                       padding: EdgeInsets.all(20),
                       child: CircularProgressIndicator(),
                     ),
-                  );
-                }
-
-                final courses = snapshot.data!.docs;
-
-                return Flexible(
-                  child: ListView(
-                    shrinkWrap: true,
-                    children: [
-                      _buildSelectionItem(
-                        title: "All Courses",
-                        isSelected: _selectedCourseId == 'ALL',
-                        onTap: () {
-                          setState(() {
-                            _selectedCourseId = 'ALL';
-                            _selectedCourseName = 'All Courses';
-                            _currentCourseDuration = 0;
-                            _selectedSemester = 'ALL';
-                          });
-                          Navigator.pop(context);
-                        },
-                      ),
-                      const Divider(height: 1),
-                      ...courses.map((doc) {
-                        final data = doc.data() as Map<String, dynamic>;
-                        return _buildSelectionItem(
-                          title: data['name'],
-                          subtitle: "${data['durationYears']} Years",
-                          isSelected: _selectedCourseId == doc.id,
+                  )
+                : Flexible(
+                    child: ListView(
+                      shrinkWrap: true,
+                      children: [
+                        _buildSelectionItem(
+                          title: "All Courses",
+                          isSelected: _selectedCourseId == 'ALL',
                           onTap: () {
                             setState(() {
-                              _selectedCourseId = doc.id;
-                              _selectedCourseName = data['name'];
-                              _currentCourseDuration = data['durationYears'];
+                              _selectedCourseId = 'ALL';
+                              _selectedCourseName = 'All Courses';
+                              _currentCourseDuration = 0;
                               _selectedSemester = 'ALL';
                             });
                             Navigator.pop(context);
                           },
-                        );
-                      }).toList(),
-                    ],
+                        ),
+                        const Divider(height: 1),
+                        ..._coursesList.map((data) {
+                          return _buildSelectionItem(
+                            title: data['name'] ?? 'Unknown',
+                            subtitle: "${data['duration_years'] ?? 4} Years",
+                            isSelected:
+                                _selectedCourseId == data['id'].toString(),
+                            onTap: () {
+                              setState(() {
+                                _selectedCourseId = data['id'].toString();
+                                _selectedCourseName = data['name'];
+                                _currentCourseDuration =
+                                    int.tryParse(
+                                      data['duration_years'].toString(),
+                                    ) ??
+                                    4;
+                                _selectedSemester = 'ALL';
+                              });
+                              Navigator.pop(context);
+                            },
+                          );
+                        }).toList(),
+                      ],
+                    ),
                   ),
-                );
-              },
-            ),
           ],
         ),
       ),
@@ -292,7 +373,9 @@ class _ResourceUploadScreenState extends State<ResourceUploadScreen> {
       return;
     }
 
-    final int maxSemesters = _currentCourseDuration * 2;
+    final int maxSemesters = _currentCourseDuration > 0
+        ? (_currentCourseDuration * 2)
+        : 8;
     final List<String> semesterOptions = ['ALL'];
     for (int i = 1; i <= maxSemesters; i++) {
       semesterOptions.add(i.toString());
@@ -741,120 +824,102 @@ class _ResourceUploadScreenState extends State<ResourceUploadScreen> {
   }
 
   Widget _buildManageTab() {
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('resources')
-          .orderBy('uploadedAt', descending: true)
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return const Center(
-            child: GeometricLoader(size: 40, isDarkMode: false),
-          );
-        }
+    if (_isLoadingResources) {
+      return const Center(child: GeometricLoader(size: 40, isDarkMode: false));
+    }
 
-        final docs = snapshot.data!.docs;
-
-        if (docs.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.folder_open_rounded,
-                  size: 60,
-                  color: Colors.grey[300],
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  "No resources uploaded yet",
-                  style: TextStyle(color: Colors.grey[500]),
-                ),
-              ],
+    if (_resourcesList.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.folder_open_rounded, size: 60, color: Colors.grey[300]),
+            const SizedBox(height: 16),
+            Text(
+              "No resources uploaded yet",
+              style: TextStyle(color: Colors.grey[500]),
             ),
-          );
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.all(24),
+      itemCount: _resourcesList.length,
+      itemBuilder: (context, index) {
+        final data = _resourcesList[index];
+        final id = data['id'].toString();
+        final type = data['type'] ?? 'Resource';
+        final rawDate = data['created_at'];
+        DateTime? date;
+        if (rawDate != null) {
+          date = DateTime.tryParse(rawDate);
         }
 
-        return ListView.builder(
-          padding: const EdgeInsets.all(24),
-          itemCount: docs.length,
-          itemBuilder: (context, index) {
-            final data = docs[index].data() as Map<String, dynamic>;
-            final id = docs[index].id;
-            final type = data['type'] ?? 'Resource';
-            final date = (data['uploadedAt'] as Timestamp?)?.toDate();
-
-            return Container(
-              margin: const EdgeInsets.only(bottom: 16),
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.03),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
+        return Container(
+          margin: const EdgeInsets.only(bottom: 16),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.03),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
               ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: type == 'Assignment'
-                          ? Colors.orange.withOpacity(0.1)
-                          : Colors.blue.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Icon(
-                      _getTypeIcon(type),
-                      color: type == 'Assignment' ? Colors.orange : Colors.blue,
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          data['title'] ?? 'Untitled',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          "${data['courseName']} • ${data['semester'] == 'ALL' ? 'All Semesters' : 'Sem ${data['semester']}'}",
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.grey[600],
-                          ),
-                        ),
-                        if (date != null)
-                          Text(
-                            DateFormat('dd MMM yyyy').format(date),
-                            style: TextStyle(
-                              fontSize: 10,
-                              color: Colors.grey[400],
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(
-                      Icons.delete_outline_rounded,
-                      color: Colors.red,
-                    ),
-                    onPressed: () => _deleteResource(id, data['fileUrl']),
-                  ),
-                ],
+            ],
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: type == 'Assignment'
+                      ? Colors.orange.withOpacity(0.1)
+                      : Colors.blue.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  _getTypeIcon(type),
+                  color: type == 'Assignment' ? Colors.orange : Colors.blue,
+                ),
               ),
-            );
-          },
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      data['title'] ?? 'Untitled',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      "${data['course_name'] ?? 'All Courses'} • ${data['semester'] == 'ALL' ? 'All Semesters' : 'Sem ${data['semester']}'}",
+                      style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                    ),
+                    if (date != null)
+                      Text(
+                        DateFormat('dd MMM yyyy').format(date),
+                        style: TextStyle(fontSize: 10, color: Colors.grey[400]),
+                      ),
+                  ],
+                ),
+              ),
+              IconButton(
+                icon: const Icon(
+                  Icons.delete_outline_rounded,
+                  color: Colors.red,
+                ),
+                onPressed: () => _deleteResource(id),
+              ),
+            ],
+          ),
         );
       },
     );
@@ -970,7 +1035,7 @@ class _ResourceUploadScreenState extends State<ResourceUploadScreen> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      GeometricLoader(size: 40, isDarkMode: false),
+                      const GeometricLoader(size: 40, isDarkMode: false),
                       const SizedBox(height: 16),
                       Text(
                         "Uploading... ${(_uploadProgress * 100).toInt()}%",

@@ -1,162 +1,158 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/api_config.dart';
 import '../utils/custom_toast.dart';
+import '../widgets/geometric_loader.dart';
 
-class ManageFacultyScreen extends StatefulWidget {
-  const ManageFacultyScreen({super.key});
+class AddAdminScreen extends StatefulWidget {
+  const AddAdminScreen({super.key});
 
   @override
-  State<ManageFacultyScreen> createState() => _ManageFacultyScreenState();
+  State<AddAdminScreen> createState() => _AddAdminScreenState();
 }
 
-class _ManageFacultyScreenState extends State<ManageFacultyScreen> {
+class _AddAdminScreenState extends State<AddAdminScreen> {
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
-  final FocusNode _focusNode = FocusNode();
+  final TextEditingController _passwordController = TextEditingController();
+
+  final FocusNode _nameFocus = FocusNode();
+  final FocusNode _emailFocus = FocusNode();
+  final FocusNode _phoneFocus = FocusNode();
+  final FocusNode _passwordFocus = FocusNode();
+
   bool _isLoading = false;
-  bool _isProcessing = false;
-  bool _isFocused = false;
-  Map<String, dynamic>? _userData;
-  String? _userDocId;
-  String _errorMessage = '';
+  bool _isPasswordVisible = false;
 
   @override
   void initState() {
     super.initState();
-    _focusNode.addListener(() {
-      setState(() {
-        _isFocused = _focusNode.hasFocus;
-      });
-    });
+    _nameFocus.addListener(() => setState(() {}));
+    _emailFocus.addListener(() => setState(() {}));
+    _phoneFocus.addListener(() => setState(() {}));
+    _passwordFocus.addListener(() => setState(() {}));
   }
 
   @override
   void dispose() {
+    _nameController.dispose();
+    _emailController.dispose();
     _phoneController.dispose();
-    _focusNode.dispose();
+    _passwordController.dispose();
+    _nameFocus.dispose();
+    _emailFocus.dispose();
+    _phoneFocus.dispose();
+    _passwordFocus.dispose();
     super.dispose();
   }
 
-  Future<void> _searchUser() async {
-    _focusNode.unfocus();
-    if (_phoneController.text.trim().length != 10) {
-      _showCustomToast("Please enter a valid 10-digit number", false);
+  Future<String?> _getToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('auth_token');
+  }
+
+  Future<void> _createAdmin() async {
+    FocusScope.of(context).unfocus();
+
+    final name = _nameController.text.trim();
+    final email = _emailController.text.trim();
+    final phone = _phoneController.text.trim();
+    final password = _passwordController.text.trim();
+
+    if (name.isEmpty || email.isEmpty || phone.isEmpty || password.isEmpty) {
+      CustomToast.show(
+        context,
+        "Please fill all required fields",
+        isError: true,
+      );
       return;
     }
 
-    setState(() {
-      _isLoading = true;
-      _errorMessage = '';
-      _userData = null;
-    });
+    if (!RegExp(
+      r"^[a-zA-Z0-9.a-zA-Z0-9.!#$%&'*+-/=?^_`{|}~]+@[a-zA-Z0-9]+\.[a-zA-Z]+",
+    ).hasMatch(email)) {
+      CustomToast.show(context, "Please enter a valid email", isError: true);
+      return;
+    }
+
+    if (phone.length < 10) {
+      CustomToast.show(
+        context,
+        "Please enter a valid 10-digit phone number",
+        isError: true,
+      );
+      return;
+    }
+
+    if (password.length < 6) {
+      CustomToast.show(
+        context,
+        "Password must be at least 6 characters",
+        isError: true,
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
 
     try {
-      final formattedPhone = "+91${_phoneController.text.trim()}";
+      final token = await _getToken();
 
-      final querySnapshot = await FirebaseFirestore.instance
-          .collection('users')
-          .where('phoneNumber', isEqualTo: formattedPhone)
-          .limit(1)
-          .get();
+      final response = await http.post(
+        Uri.parse(
+          ApiConfig.registerAdmin,
+        ), // Ensure this is defined in your ApiConfig
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'name': name,
+          'email': email,
+          'phone_number': phone,
+          'password': password,
+        }),
+      );
 
-      if (querySnapshot.docs.isNotEmpty) {
-        setState(() {
-          _userDocId = querySnapshot.docs.first.id;
-          _userData = querySnapshot.docs.first.data();
-        });
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 201 || response.statusCode == 200) {
+        if (mounted) {
+          CustomToast.show(context, "Admin Registered Successfully!");
+          Navigator.pop(context);
+        }
       } else {
-        setState(() {
-          _errorMessage = "No user found with this number.";
-        });
+        String errorMessage = data['message'] ?? "Registration failed";
+        if (data['errors'] != null) {
+          final errors = data['errors'] as Map<String, dynamic>;
+          errorMessage = errors.values.first[0];
+        }
+        if (mounted) CustomToast.show(context, errorMessage, isError: true);
       }
     } catch (e) {
-      setState(() {
-        _errorMessage = "Error searching user";
-      });
-    } finally {
-      setState(() {
-        _isLoading = false;
-      });
-    }
-  }
-
-  Future<void> _updateUserRole(bool makeAdmin) async {
-    if (_userDocId == null) return;
-
-    setState(() {
-      _isProcessing = true;
-    });
-
-    try {
-      final newRole = makeAdmin ? 'admin' : 'student';
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(_userDocId)
-          .update({'role': newRole});
-
-      setState(() {
-        _userData!['role'] = newRole;
-      });
-
       if (mounted) {
-        _showCustomToast(
-          makeAdmin ? "Promoted to Faculty" : "Access Revoked",
-          true,
+        CustomToast.show(
+          context,
+          "Server Error. Please check your connection.",
+          isError: true,
         );
       }
-    } catch (e) {
-      if (mounted) {
-        _showCustomToast("Operation failed", false);
-      }
     } finally {
-      setState(() {
-        _isProcessing = false;
-      });
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  void _showCustomToast(String message, bool isSuccess) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.2),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                isSuccess
-                    ? Icons.check_circle_rounded
-                    : Icons.error_outline_rounded,
-                color: Colors.white,
-                size: 20,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                message,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
-                ),
-              ),
-            ),
-          ],
-        ),
-        backgroundColor: isSuccess
-            ? const Color(0xFF00D26A)
-            : const Color(0xFFFF4B4B),
-        behavior: SnackBarBehavior.floating,
-        elevation: 0,
-        margin: const EdgeInsets.all(20),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        duration: const Duration(seconds: 2),
-      ),
+  void _showRevokeAccessSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => const RevokeAdminBottomSheet(),
     );
   }
 
@@ -188,621 +184,92 @@ class _ManageFacultyScreenState extends State<ManageFacultyScreen> {
             ),
           ),
         ),
-        floatingActionButton: FloatingActionButton.extended(
-          onPressed: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => const AddAdminScreen()),
-            );
-          },
-          backgroundColor: Colors.black,
-          elevation: 5,
-          icon: const Icon(Icons.add_moderator_rounded, color: Colors.white),
-          label: const Text(
-            "Add New Admin",
-            style: TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.bold,
-              fontSize: 14,
-            ),
-          ),
-        ),
-        body: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                "Manage Access",
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFF1A1A1A),
-                  letterSpacing: -0.5,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                "Search user by phone number to manage role.",
-                style: TextStyle(
-                  fontSize: 13,
-                  color: Colors.grey[600],
-                  height: 1.5,
-                ),
-              ),
-              const SizedBox(height: 25),
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: _isFocused
-                        ? Colors.black
-                        : Colors.grey.withOpacity(0.1),
-                    width: _isFocused ? 1.5 : 1,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFF1A1A1A).withOpacity(0.04),
-                      blurRadius: 20,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 20,
-                  vertical: 8,
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.only(right: 12),
-                      decoration: BoxDecoration(
-                        border: Border(
-                          right: BorderSide(
-                            color: Colors.grey.withOpacity(0.2),
-                          ),
-                        ),
-                      ),
-                      child: Text(
-                        "+91",
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: theme.primaryColor,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: TextField(
-                        controller: _phoneController,
-                        focusNode: _focusNode,
-                        keyboardType: TextInputType.phone,
-                        textInputAction: TextInputAction.search,
-                        onSubmitted: (_) => _searchUser(),
-                        inputFormatters: [
-                          LengthLimitingTextInputFormatter(10),
-                          FilteringTextInputFormatter.digitsOnly,
-                        ],
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: 1,
-                        ),
-                        decoration: InputDecoration(
-                          hintText: "Enter 10-digit number",
-                          hintStyle: TextStyle(
-                            color: Colors.grey[400],
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                            letterSpacing: 0,
-                          ),
-                          border: InputBorder.none,
-                          isDense: true,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    GestureDetector(
-                      onTap: _isLoading ? null : _searchUser,
-                      child: Container(
-                        height: 44,
-                        width: 44,
-                        decoration: BoxDecoration(
-                          color: theme.primaryColor,
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: _isLoading
-                            ? const Padding(
-                                padding: EdgeInsets.all(12),
-                                child: CircularProgressIndicator(
-                                  color: Colors.white,
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(
-                                Icons.search_rounded,
-                                color: Colors.white,
-                                size: 22,
-                              ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 32),
-              if (_errorMessage.isNotEmpty)
-                Center(
-                  child: Column(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.red.withOpacity(0.05),
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(
-                          Icons.person_off_rounded,
-                          size: 32,
-                          color: Colors.red[300],
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        _errorMessage,
-                        style: TextStyle(
-                          color: Colors.grey[500],
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              if (_userData != null) _buildUserCard(theme),
-              const SizedBox(height: 100),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildUserCard(ThemeData theme) {
-    final bool isAdmin = _userData!['role'] == 'admin';
-    final String name = _userData!['name'] ?? 'Unknown';
-    final String email = _userData!['email'] ?? 'No Email';
-    final String phone = _userData!['phoneNumber'] ?? 'No Phone';
-    final String? profileUrl = _userData!['profileUrl'];
-
-    return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 300),
-      child: Container(
-        key: ValueKey(_userData!['role']),
-        width: double.infinity,
-        padding: const EdgeInsets.all(24),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(28),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.03),
-              blurRadius: 20,
-              offset: const Offset(0, 10),
-            ),
-          ],
-        ),
-        child: Column(
-          children: [
-            Container(
-              width: 90,
-              height: 90,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 4),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.08),
-                    blurRadius: 15,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
-                image: (profileUrl != null && profileUrl.isNotEmpty)
-                    ? DecorationImage(
-                        image: NetworkImage(profileUrl),
-                        fit: BoxFit.cover,
-                      )
-                    : null,
-              ),
-              child: (profileUrl == null || profileUrl.isEmpty)
-                  ? Container(
-                      decoration: BoxDecoration(
-                        color: theme.primaryColor.withOpacity(0.05),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        Icons.person_rounded,
-                        size: 44,
-                        color: theme.primaryColor,
-                      ),
-                    )
-                  : null,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              name,
-              style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w800,
-                color: Color(0xFF1A1A1A),
-                letterSpacing: -0.5,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              phone,
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: Colors.grey[600],
-              ),
-            ),
-            Text(
-              email,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                color: Colors.grey[400],
-              ),
-            ),
-            const SizedBox(height: 24),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF9FAFB),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0xFFF3F4F6)),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    "Current Role",
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF6B7280),
-                    ),
-                  ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: isAdmin
-                          ? const Color(0xFF6366F1).withOpacity(0.1)
-                          : const Color(0xFF10B981).withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      isAdmin ? "FACULTY" : "STUDENT",
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800,
-                        color: isAdmin
-                            ? const Color(0xFF6366F1)
-                            : const Color(0xFF10B981),
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-            SizedBox(
-              width: double.infinity,
-              height: 56,
-              child: ElevatedButton(
-                onPressed: _isProcessing
-                    ? null
-                    : () => _updateUserRole(!isAdmin),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: isAdmin
-                      ? const Color(0xFFFEF2F2)
-                      : theme.primaryColor,
-                  elevation: isAdmin ? 0 : 8,
-                  shadowColor: isAdmin
-                      ? Colors.transparent
-                      : theme.primaryColor.withOpacity(0.4),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(18),
-                    side: isAdmin
-                        ? const BorderSide(color: Color(0xFFFEE2E2))
-                        : BorderSide.none,
-                  ),
-                ),
-                child: _isProcessing
-                    ? SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(
-                          color: isAdmin ? Colors.red : Colors.white,
-                          strokeWidth: 2,
-                        ),
-                      )
-                    : Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            isAdmin
-                                ? Icons.remove_circle_outline_rounded
-                                : Icons.verified_user_rounded,
-                            color: isAdmin ? Colors.red : Colors.white,
-                            size: 20,
-                          ),
-                          const SizedBox(width: 10),
-                          Text(
-                            isAdmin
-                                ? "Revoke Faculty Access"
-                                : "Promote to Faculty",
-                            style: TextStyle(
-                              color: isAdmin ? Colors.red : Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
-                      ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class AddAdminScreen extends StatefulWidget {
-  const AddAdminScreen({super.key});
-
-  @override
-  State<AddAdminScreen> createState() => _AddAdminScreenState();
-}
-
-class _AddAdminScreenState extends State<AddAdminScreen> {
-  final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _phoneController = TextEditingController();
-  final FocusNode _nameFocus = FocusNode();
-  final FocusNode _phoneFocus = FocusNode();
-  bool _isLoading = false;
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _phoneController.dispose();
-    _nameFocus.dispose();
-    _phoneFocus.dispose();
-    super.dispose();
-  }
-
-  Future<void> _createAdmin() async {
-    FocusScope.of(context).unfocus();
-    final name = _nameController.text.trim();
-    final phone = _phoneController.text.trim();
-
-    if (name.isEmpty || phone.length != 10) {
-      _showCustomToast("Please fill all details correctly", false);
-      return;
-    }
-
-    setState(() => _isLoading = true);
-
-    try {
-      final formattedPhone = "+91$phone";
-      final userQuery = await FirebaseFirestore.instance
-          .collection('users')
-          .where('phoneNumber', isEqualTo: formattedPhone)
-          .get();
-
-      if (userQuery.docs.isNotEmpty) {
-        _showCustomToast("User with this number already exists", false);
-        setState(() => _isLoading = false);
-        return;
-      }
-
-      await FirebaseFirestore.instance.collection('users').add({
-        'name': name,
-        'phoneNumber': formattedPhone,
-        'role': 'admin',
-        'createdAt': FieldValue.serverTimestamp(),
-        'isPreApproved': true,
-        'isSetupCompleted': true,
-        'email': 'Pending Signup',
-        'profileUrl': '',
-      });
-
-      if (mounted) {
-        _showCustomToast("Admin Access Granted Successfully!", true);
-        Navigator.pop(context);
-      }
-    } catch (e) {
-      if (mounted) {
-        _showCustomToast("Error creating admin: $e", false);
-      }
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  void _showCustomToast(String message, bool isSuccess) {
-    CustomToast.show(
-        context,
-        message,
-        isError: !isSuccess
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return GestureDetector(
-      onTap: () => FocusScope.of(context).unfocus(),
-      child: Scaffold(
-        backgroundColor: Colors.white,
-        appBar: AppBar(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          centerTitle: true,
-          leading: IconButton(
-            icon: const Icon(
-              Icons.arrow_back_ios_new_rounded,
-              color: Colors.black,
-              size: 20,
-            ),
-            onPressed: () => Navigator.pop(context),
-          ),
-          title: Text(
-            "Add New Admin",
-            style: theme.textTheme.titleLarge?.copyWith(
-              fontWeight: FontWeight.w800,
-              fontSize: 16,
-            ),
-          ),
-        ),
         body: SafeArea(
           child: Column(
             children: [
               Expanded(
                 child: SingleChildScrollView(
+                  physics: const BouncingScrollPhysics(),
                   padding: const EdgeInsets.symmetric(horizontal: 24),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const SizedBox(height: 20),
-                      const Text(
-                        "Create Profile",
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF1A1A1A),
+                      Text(
+                        "Create New Faculty",
+                        style: theme.textTheme.displayLarge?.copyWith(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          color: const Color(0xFF1A1A1A),
                           letterSpacing: -0.5,
                         ),
                       ),
-                      const SizedBox(height: 2),
+                      const SizedBox(height: 6),
                       Text(
-                        "Enter details to pre-approve a new faculty member.",
-                        style: TextStyle(
-                          fontSize: 13,
+                        "Register a new faculty member with administrative privileges.",
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontSize: 12,
                           color: Colors.grey[600],
                           height: 1.5,
                         ),
                       ),
-                      const SizedBox(height: 25),
+                      const SizedBox(height: 32),
+
                       _buildLabel("Full Name"),
-                      TextField(
+                      _buildTextField(
                         controller: _nameController,
                         focusNode: _nameFocus,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 14,
-                          color: Colors.black,
-                        ),
-                        decoration: InputDecoration(
-                          hintText: "e.g. Dr. Rajesh Kumar",
-                          hintStyle: TextStyle(
-                            color: Colors.grey[400],
-                            fontSize: 14,
-                          ),
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 20,
-                            vertical: 18,
-                          ),
-                          filled: true,
-                          fillColor: Colors.white,
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(16),
-                            borderSide: BorderSide(
-                              color: Colors.grey.withOpacity(0.3),
-                              width: 1,
-                            ),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(16),
-                            borderSide: const BorderSide(
-                              color: Colors.black,
-                              width: 1.5,
-                            ),
-                          ),
-                        ),
+                        icon: Icons.person_outline_rounded,
+                        hint: "e.g. Dr. Rajesh Kumar",
+                        theme: theme,
+                        textCapitalization: TextCapitalization.words,
                       ),
-                      const SizedBox(height: 24),
+                      const SizedBox(height: 20),
+
+                      _buildLabel("Email Address"),
+                      _buildTextField(
+                        controller: _emailController,
+                        focusNode: _emailFocus,
+                        icon: Icons.email_outlined,
+                        hint: "faculty@college.edu",
+                        theme: theme,
+                        keyboardType: TextInputType.emailAddress,
+                      ),
+                      const SizedBox(height: 20),
+
                       _buildLabel("Mobile Number"),
-                      TextField(
+                      _buildTextField(
                         controller: _phoneController,
                         focusNode: _phoneFocus,
+                        icon: Icons.phone_outlined,
+                        hint: "Enter 10-digit number",
+                        theme: theme,
                         keyboardType: TextInputType.phone,
-                        inputFormatters: [
-                          LengthLimitingTextInputFormatter(10),
-                          FilteringTextInputFormatter.digitsOnly,
-                        ],
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 14,
-                          color: Colors.black,
-                          letterSpacing: 1,
-                        ),
-                        decoration: InputDecoration(
-                          hintText: "Enter 10-digit number",
-                          hintStyle: TextStyle(
-                            color: Colors.grey[400],
-                            fontSize: 14,
-                            letterSpacing: 0,
-                          ),
-                          prefixIcon: Padding(
-                            padding: const EdgeInsets.all(18.0),
-                            child: Text(
-                              "+91",
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700,
-                                color: Colors.grey[800],
-                              ),
-                            ),
-                          ),
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 20,
-                            vertical: 18,
-                          ),
-                          filled: true,
-                          fillColor: Colors.white,
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(16),
-                            borderSide: BorderSide(
-                              color: Colors.grey.withOpacity(0.3),
-                              width: 1,
-                            ),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(16),
-                            borderSide: const BorderSide(
-                              color: Colors.black,
-                              width: 1.5,
-                            ),
-                          ),
-                        ),
+                        maxLength: 10,
                       ),
-                      const SizedBox(height: 25),
+                      const SizedBox(height: 20),
+
+                      _buildLabel("Create Password"),
+                      _buildPasswordField(theme),
+
+                      const SizedBox(height: 32),
+
+                      // Security Protocol Card
                       Container(
                         padding: const EdgeInsets.all(20),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFF9FAFB),
+                          color: Colors.white,
                           borderRadius: BorderRadius.circular(16),
                           border: Border.all(
-                            color: Colors.grey.withOpacity(0.1),
+                            color: Colors.grey.withOpacity(0.15),
                           ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.02),
+                              blurRadius: 10,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -811,70 +278,149 @@ class _AddAdminScreenState extends State<AddAdminScreen> {
                               children: [
                                 Icon(
                                   Icons.security_rounded,
-                                  size: 16,
-                                  color: Colors.grey[700],
+                                  size: 18,
+                                  color: theme.primaryColor,
                                 ),
                                 const SizedBox(width: 8),
                                 Text(
-                                  "Security & Access Protocol".toUpperCase(),
+                                  "SECURITY PROTOCOL",
                                   style: TextStyle(
                                     fontSize: 11,
                                     fontWeight: FontWeight.w800,
-                                    color: Colors.grey[700],
-                                    letterSpacing: 0.5,
+                                    color: theme.primaryColor,
+                                    letterSpacing: 0.8,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 14),
+                            _buildBulletPoint(
+                              "This action grants full administrative access.",
+                            ),
+                            const SizedBox(height: 8),
+                            _buildBulletPoint(
+                              "Credentials will be securely hashed in database.",
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      const SizedBox(height: 32),
+                      const Divider(
+                        height: 1,
+                        thickness: 1,
+                        color: Color(0xFFE5E7EB),
+                      ),
+                      const SizedBox(height: 32),
+
+                      // Danger Zone (Revoke Access)
+                      Container(
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFEF2F2),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: const Color(0xFFFCA5A5).withOpacity(0.5),
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(
+                                  Icons.warning_amber_rounded,
+                                  size: 18,
+                                  color: Color(0xFFDC2626),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  "DANGER ZONE",
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w800,
+                                    color: const Color(0xFFDC2626),
+                                    letterSpacing: 0.8,
                                   ),
                                 ),
                               ],
                             ),
                             const SizedBox(height: 12),
-                            _buildBulletPoint(
-                              "This action creates a pre-approved profile.",
+                            const Text(
+                              "Need to remove an existing admin? Revoking access will immediately delete their administrative account.",
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Color(0xFF991B1B),
+                                height: 1.4,
+                              ),
                             ),
-                            const SizedBox(height: 8),
-                            _buildBulletPoint(
-                              "User must login with the exact +91 number.",
-                            ),
-                            const SizedBox(height: 8),
-                            _buildBulletPoint(
-                              "Profile completion will be skipped automatically.",
+                            const SizedBox(height: 16),
+                            SizedBox(
+                              width: double.infinity,
+                              height: 44,
+                              child: OutlinedButton(
+                                onPressed: _showRevokeAccessSheet,
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: const Color(0xFFDC2626),
+                                  side: const BorderSide(
+                                    color: Color(0xFFF87171),
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                                child: const Text(
+                                  "Revoke Access",
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ),
                             ),
                           ],
                         ),
                       ),
+
                       const SizedBox(height: 40),
                     ],
                   ),
                 ),
               ),
-              Padding(
+
+              // Register Button at bottom
+              Container(
                 padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF7F8FA),
+                  border: Border(
+                    top: BorderSide(color: Colors.grey.withOpacity(0.1)),
+                  ),
+                ),
                 child: SizedBox(
                   width: double.infinity,
                   height: 56,
                   child: ElevatedButton(
                     onPressed: _isLoading ? null : _createAdmin,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.black,
-                      elevation: 0,
+                      backgroundColor: theme.colorScheme.secondary,
+                      disabledBackgroundColor: theme.colorScheme.secondary
+                          .withOpacity(0.6),
+                      elevation: _isLoading ? 0 : 4,
+                      shadowColor: theme.colorScheme.secondary.withOpacity(0.4),
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(18),
+                        borderRadius: BorderRadius.circular(16),
                       ),
                     ),
                     child: _isLoading
-                        ? const SizedBox(
-                            height: 24,
-                            width: 24,
-                            child: CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 2,
-                            ),
-                          )
-                        : const Text(
-                            "Grant Access",
-                            style: TextStyle(
+                        ? const GeometricLoader(size: 28, isDarkMode: false)
+                        : Text(
+                            "Grant Admin Access",
+                            style: theme.textTheme.labelLarge?.copyWith(
                               color: Colors.white,
                               fontSize: 14,
-                              fontWeight: FontWeight.bold,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.5,
                             ),
                           ),
                   ),
@@ -894,9 +440,187 @@ class _AddAdminScreenState extends State<AddAdminScreen> {
         text,
         style: const TextStyle(
           fontSize: 13,
-          fontWeight: FontWeight.w600,
-          color: Color(0xFF6B7280),
+          fontWeight: FontWeight.w700,
+          color: Color(0xFF4A4A4A),
         ),
+      ),
+    );
+  }
+
+  Widget _buildTextField({
+    required TextEditingController controller,
+    required FocusNode focusNode,
+    required IconData icon,
+    required String hint,
+    required ThemeData theme,
+    TextInputType keyboardType = TextInputType.text,
+    TextCapitalization textCapitalization = TextCapitalization.none,
+    int? maxLength,
+  }) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+      height: 58,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      decoration: BoxDecoration(
+        color: focusNode.hasFocus
+            ? Colors.white
+            : Colors.white.withOpacity(0.6),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: focusNode.hasFocus
+              ? theme.primaryColor.withOpacity(0.8)
+              : const Color(0xFFE5E7EB),
+          width: focusNode.hasFocus ? 1.8 : 1.2,
+        ),
+        boxShadow: focusNode.hasFocus
+            ? [
+                BoxShadow(
+                  color: theme.primaryColor.withOpacity(0.08),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ]
+            : [],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Icon(
+            icon,
+            size: 20,
+            color: focusNode.hasFocus
+                ? theme.primaryColor
+                : const Color(0xFF888888),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: TextField(
+              controller: controller,
+              focusNode: focusNode,
+              keyboardType: keyboardType,
+              textCapitalization: textCapitalization,
+              inputFormatters: maxLength != null
+                  ? [
+                      LengthLimitingTextInputFormatter(maxLength),
+                      if (keyboardType == TextInputType.phone)
+                        FilteringTextInputFormatter.digitsOnly,
+                    ]
+                  : null,
+              style: theme.textTheme.bodyLarge?.copyWith(
+                fontWeight: FontWeight.w600,
+                fontSize: 15,
+                color: const Color(0xFF1A1A1A),
+              ),
+              cursorColor: theme.primaryColor,
+              decoration: InputDecoration(
+                hintText: hint,
+                hintStyle: theme.textTheme.bodyMedium?.copyWith(
+                  color: const Color(0xFFAAAAAA),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w400,
+                ),
+                filled: false,
+                fillColor: Colors.transparent,
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                contentPadding: EdgeInsets.zero,
+                isDense: true,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPasswordField(ThemeData theme) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+      height: 58,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      decoration: BoxDecoration(
+        color: _passwordFocus.hasFocus
+            ? Colors.white
+            : Colors.white.withOpacity(0.6),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: _passwordFocus.hasFocus
+              ? theme.primaryColor.withOpacity(0.8)
+              : const Color(0xFFE5E7EB),
+          width: _passwordFocus.hasFocus ? 1.8 : 1.2,
+        ),
+        boxShadow: _passwordFocus.hasFocus
+            ? [
+                BoxShadow(
+                  color: theme.primaryColor.withOpacity(0.08),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ]
+            : [],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.lock_outline_rounded,
+            size: 20,
+            color: _passwordFocus.hasFocus
+                ? theme.primaryColor
+                : const Color(0xFF888888),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: TextField(
+              controller: _passwordController,
+              focusNode: _passwordFocus,
+              obscureText: !_isPasswordVisible,
+              style: theme.textTheme.bodyLarge?.copyWith(
+                fontWeight: FontWeight.w600,
+                letterSpacing: 1.5,
+                fontSize: 15,
+                color: const Color(0xFF1A1A1A),
+              ),
+              cursorColor: theme.primaryColor,
+              decoration: InputDecoration(
+                hintText: "Minimum 6 characters",
+                hintStyle: theme.textTheme.bodyMedium?.copyWith(
+                  color: const Color(0xFFAAAAAA),
+                  letterSpacing: 0.5,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w400,
+                ),
+                filled: false,
+                fillColor: Colors.transparent,
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                contentPadding: EdgeInsets.zero,
+                isDense: true,
+              ),
+            ),
+          ),
+          GestureDetector(
+            onTap: () =>
+                setState(() => _isPasswordVisible = !_isPasswordVisible),
+            child: Container(
+              color: Colors.transparent,
+              padding: const EdgeInsets.only(left: 10),
+              child: Icon(
+                _isPasswordVisible
+                    ? Icons.visibility_rounded
+                    : Icons.visibility_off_rounded,
+                color: const Color(0xFFAAAAAA),
+                size: 20,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -907,7 +631,7 @@ class _AddAdminScreenState extends State<AddAdminScreen> {
       children: [
         Padding(
           padding: const EdgeInsets.only(top: 6),
-          child: CircleAvatar(radius: 2, backgroundColor: Colors.grey[400]),
+          child: CircleAvatar(radius: 3, backgroundColor: Colors.grey[400]),
         ),
         const SizedBox(width: 12),
         Expanded(
@@ -922,6 +646,220 @@ class _AddAdminScreenState extends State<AddAdminScreen> {
           ),
         ),
       ],
+    );
+  }
+}
+
+class RevokeAdminBottomSheet extends StatefulWidget {
+  const RevokeAdminBottomSheet({super.key});
+
+  @override
+  State<RevokeAdminBottomSheet> createState() => _RevokeAdminBottomSheetState();
+}
+
+class _RevokeAdminBottomSheetState extends State<RevokeAdminBottomSheet> {
+  final TextEditingController _identifierController = TextEditingController();
+  final FocusNode _focusNode = FocusNode();
+  bool _isDeleting = false;
+
+  @override
+  void dispose() {
+    _identifierController.dispose();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  Future<String?> _getToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('auth_token');
+  }
+
+  Future<void> _revokeAccess() async {
+    FocusScope.of(context).unfocus();
+    final identifier = _identifierController.text.trim();
+
+    if (identifier.isEmpty) {
+      CustomToast.show(
+        context,
+        "Please enter email or phone number",
+        isError: true,
+      );
+      return;
+    }
+
+    setState(() => _isDeleting = true);
+
+    try {
+      final token = await _getToken();
+      final response = await http.post(
+        Uri.parse(ApiConfig.revokeAdmin),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({'identifier': identifier}),
+      );
+
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 200) {
+        if (mounted) {
+          CustomToast.show(context, data['message'] ?? "Admin Revoked!");
+          Navigator.pop(context); // Close bottom sheet
+        }
+      } else {
+        if (mounted) {
+          CustomToast.show(
+            context,
+            data['message'] ?? "Failed to revoke admin",
+            isError: true,
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) CustomToast.show(context, "Server Error", isError: true);
+    } finally {
+      if (mounted) setState(() => _isDeleting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.only(
+        left: 24,
+        right: 24,
+        top: 24,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+      ),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.only(
+          topLeft: Radius.circular(24),
+          topRight: Radius.circular(24),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+          const Text(
+            "Revoke Faculty Access",
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w800,
+              color: Color(0xFF1A1A1A),
+              letterSpacing: -0.5,
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            "Enter the registered Email or Phone number of the admin you want to remove permanently.",
+            style: TextStyle(
+              fontSize: 13,
+              color: Color(0xFF666666),
+              height: 1.5,
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          Container(
+            height: 58,
+            alignment: Alignment.center,
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF7F8FA),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: const Color(0xFFE5E7EB), width: 1.2),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.search_rounded,
+                  size: 20,
+                  color: Color(0xFF888888),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: TextField(
+                    controller: _identifierController,
+                    focusNode: _focusNode,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 15,
+                      color: Color(0xFF1A1A1A),
+                    ),
+                    decoration: const InputDecoration(
+                      hintText: "Email or Phone",
+                      hintStyle: TextStyle(
+                        color: Color(0xFFAAAAAA),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w400,
+                      ),
+                      filled: false,
+                      fillColor: Colors.transparent,
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      contentPadding: EdgeInsets.zero,
+                      isDense: true,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 32),
+          SizedBox(
+            width: double.infinity,
+            height: 56,
+            child: ElevatedButton(
+              onPressed: _isDeleting ? null : _revokeAccess,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFDC2626),
+                disabledBackgroundColor: const Color(
+                  0xFFDC2626,
+                ).withOpacity(0.6),
+                elevation: _isDeleting ? 0 : 4,
+                shadowColor: const Color(0xFFDC2626).withOpacity(0.4),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+              ),
+              child: _isDeleting
+                  ? const SizedBox(
+                      height: 24,
+                      width: 24,
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2,
+                      ),
+                    )
+                  : const Text(
+                      "Revoke Now",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

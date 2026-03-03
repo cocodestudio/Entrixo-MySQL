@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:entrixo/screens/notification_screen.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
@@ -18,10 +19,10 @@ class DashboardHeader extends SliverPersistentHeaderDelegate {
 
   @override
   Widget build(
-      BuildContext context,
-      double shrinkOffset,
-      bool overlapsContent,
-      ) {
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) {
     final theme = Theme.of(context);
     final percent = math.min(shrinkOffset / (maxExtent - minExtent), 1.0);
 
@@ -309,8 +310,8 @@ class DashboardHeader extends SliverPersistentHeaderDelegate {
                               child: ClipOval(
                                 child: CachedNetworkImage(
                                   imageUrl:
-                                  (userImage != null &&
-                                      userImage!.isNotEmpty)
+                                      (userImage != null &&
+                                          userImage!.isNotEmpty)
                                       ? userImage!
                                       : 'https://ui-avatars.com/api/?name=${userName.replaceAll(' ', '+')}&background=6366F1&color=fff&size=128',
                                   fit: BoxFit.cover,
@@ -464,7 +465,15 @@ class DashboardHeader extends SliverPersistentHeaderDelegate {
                           child: Material(
                             color: Colors.transparent,
                             child: InkWell(
-                              onTap: () {},
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) =>
+                                        const NotificationScreen(),
+                                  ),
+                                );
+                              },
                               borderRadius: BorderRadius.circular(22),
                               splashColor: Colors.white.withOpacity(0.3),
                               highlightColor: Colors.white.withOpacity(0.2),
@@ -507,6 +516,6 @@ class DashboardHeader extends SliverPersistentHeaderDelegate {
   @override
   bool shouldRebuild(covariant DashboardHeader oldDelegate) =>
       userName != oldDelegate.userName ||
-          userImage != oldDelegate.userImage ||
-          topPadding != oldDelegate.topPadding;
+      userImage != oldDelegate.userImage ||
+      topPadding != oldDelegate.topPadding;
 }

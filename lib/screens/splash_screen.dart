@@ -1,7 +1,4 @@
 import 'dart:async';
-import 'package:entrixo/screens/student_setup_screen.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -55,9 +52,10 @@ class _SplashScreenState extends State<SplashScreen>
       if (isFirstTime) {
         nextScreen = const OnboardingScreen();
       } else {
-        final user = FirebaseAuth.instance.currentUser;
-        if (user != null) {
-          nextScreen = await _determineUserDestination(user);
+        final String? token = prefs.getString('auth_token');
+
+        if (token != null && token.isNotEmpty) {
+          nextScreen = await _determineUserDestination(prefs);
         } else {
           nextScreen = const LoginScreen();
         }
@@ -69,45 +67,12 @@ class _SplashScreenState extends State<SplashScreen>
     }
   }
 
-  Future<Widget> _determineUserDestination(User user) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-
-      final doc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .get(const GetOptions(source: Source.serverAndCache))
-          .timeout(const Duration(seconds: 5));
-
-      if (doc.exists && doc.data() != null) {
-        final data = doc.data()!;
-        final String role = data['role'] ?? 'student';
-        final bool isSetupCompleted = data['isSetupCompleted'] ?? false;
-
-        await prefs.setString('user_role', role);
-        await prefs.setBool('setup_done', isSetupCompleted);
-
-        if (role == 'admin') {
-          return const DashboardScreen();
-        }
-
-        return isSetupCompleted
-            ? const DashboardScreen()
-            : const StudentSetupScreen();
-      }
-
-      return const LoginScreen();
-    } catch (e) {
-      final prefs = await SharedPreferences.getInstance();
-      final bool? localSetupDone = prefs.getBool('setup_done');
-      final String? localRole = prefs.getString('user_role');
-
-      if (localSetupDone == true || localRole == 'admin') {
-        return const DashboardScreen();
-      }
-
-      return const LoginScreen();
+  Future<Widget> _determineUserDestination(SharedPreferences prefs) async {
+    final String? token = prefs.getString('auth_token');
+    if (token != null && token.isNotEmpty) {
+      return const DashboardScreen();
     }
+    return const LoginScreen();
   }
 
   void _navigate(Widget nextScreen, DateTime startTime) {

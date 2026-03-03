@@ -1,11 +1,12 @@
-import 'dart:ui';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
+import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
-
+import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/api_config.dart';
 import '../utils/custom_toast.dart';
 
 class ManualAttendanceState {
@@ -14,7 +15,7 @@ class ManualAttendanceState {
   final int? selectedSemester;
   final String? selectedSubjectId;
   final DateTime selectedDate;
-  final List<DocumentSnapshot> students;
+  final List<Map<String, dynamic>> students;
   final Map<String, String> attendanceStatus;
   final String? errorMessage;
   final String? activeSessionId;
@@ -41,7 +42,7 @@ class ManualAttendanceState {
     int? selectedSemester,
     String? selectedSubjectId,
     DateTime? selectedDate,
-    List<DocumentSnapshot>? students,
+    List<Map<String, dynamic>>? students,
     Map<String, String>? attendanceStatus,
     String? errorMessage,
     String? activeSessionId,
@@ -73,36 +74,48 @@ final manualAttendanceProvider =
     });
 
 class ManualAttendanceController extends StateNotifier<ManualAttendanceState> {
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-
   ManualAttendanceController()
     : super(ManualAttendanceState(selectedDate: DateTime.now())) {
     _checkActiveSession();
   }
 
+  Future<String?> _getToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('auth_token');
+  }
+
   Future<void> _checkActiveSession() async {
     state = state.copyWith(isLoading: true);
     try {
-      final sessionQuery = await _firestore
-          .collection('academic_sessions')
-          .where('status', isEqualTo: 'Active')
-          .limit(1)
-          .get();
+      final token = await _getToken();
+      final response = await http
+          .get(
+            Uri.parse('${ApiConfig.baseUrl}/active-session'),
+            headers: {
+              'Authorization': 'Bearer $token',
+              'Accept': 'application/json',
+            },
+          )
+          .timeout(const Duration(seconds: 10));
 
-      if (sessionQuery.docs.isEmpty) {
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        state = state.copyWith(
+          isLoading: false,
+          activeSessionId: data['data']['id'].toString(),
+        );
+      } else {
         state = state.copyWith(
           isLoading: false,
           errorMessage:
               "CRITICAL: No Active Academic Session found! Please create one first.",
         );
-      } else {
-        state = state.copyWith(
-          isLoading: false,
-          activeSessionId: sessionQuery.docs.first.id,
-        );
       }
     } catch (e) {
-      state = state.copyWith(isLoading: false, errorMessage: e.toString());
+      state = state.copyWith(
+        isLoading: false,
+        errorMessage: "Network error: $e",
+      );
     }
   }
 
@@ -152,33 +165,52 @@ class ManualAttendanceController extends StateNotifier<ManualAttendanceState> {
     state = state.copyWith(isLoading: true);
 
     try {
-      final studentsQuery = await _firestore
-          .collection('users')
-          .where('role', isEqualTo: 'student')
-          .where('courseId', isEqualTo: state.selectedCourseId)
-          .where('currentSemester', isEqualTo: state.selectedSemester)
-          .orderBy('rollNumber')
-          .get();
-
+      final token = await _getToken();
       final dateKey = DateFormat('yyyy-MM-dd').format(state.selectedDate);
-      final attendanceQuery = await _firestore
-          .collection('attendance')
-          .where('subjectId', isEqualTo: state.selectedSubjectId)
-          .where('dateKey', isEqualTo: dateKey)
-          .get();
 
-      final Map<String, String> statusMap = {};
+      final response = await http
+          .post(
+            Uri.parse('${ApiConfig.baseUrl}/manual-attendance/data'),
+            headers: {
+              'Authorization': 'Bearer $token',
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: jsonEncode({
+              'course_id': state.selectedCourseId,
+              'semester': state.selectedSemester,
+              'subject_id': state.selectedSubjectId,
+              'date': dateKey,
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
 
-      for (var doc in attendanceQuery.docs) {
-        final data = doc.data();
-        statusMap[data['uid']] = data['status'] ?? 'Present';
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+
+        final List<dynamic> rawStudents = data['students'] ?? [];
+        final Map<String, dynamic> rawAttendance =
+            data['attendance_status'] ?? {};
+
+        final List<Map<String, dynamic>> parsedStudents = rawStudents
+            .map((e) => e as Map<String, dynamic>)
+            .toList();
+        final Map<String, String> statusMap = {};
+
+        rawAttendance.forEach((key, value) {
+          statusMap[key.toString()] = value.toString();
+        });
+
+        state = state.copyWith(
+          isLoading: false,
+          students: parsedStudents,
+          attendanceStatus: statusMap,
+        );
+      } else {
+        throw Exception(
+          jsonDecode(response.body)['message'] ?? "Failed to fetch data",
+        );
       }
-
-      state = state.copyWith(
-        isLoading: false,
-        students: studentsQuery.docs,
-        attendanceStatus: statusMap,
-      );
     } catch (e) {
       state = state.copyWith(
         isLoading: false,
@@ -198,7 +230,7 @@ class ManualAttendanceController extends StateNotifier<ManualAttendanceState> {
   void markAll(String status) {
     final newMap = Map<String, String>.from(state.attendanceStatus);
     for (var student in state.students) {
-      newMap[student.id] = status;
+      newMap[student['id'].toString()] = status;
     }
     state = state.copyWith(attendanceStatus: newMap);
   }
@@ -207,58 +239,39 @@ class ManualAttendanceController extends StateNotifier<ManualAttendanceState> {
     if (state.attendanceStatus.isEmpty) return;
 
     state = state.copyWith(isLoading: true);
-    final batch = _firestore.batch();
-    final dateKey = DateFormat('yyyy-MM-dd').format(state.selectedDate);
-    final uniqueDateSuffix = DateFormat('yyyyMMdd').format(state.selectedDate);
 
     try {
-      final existingQuery = await _firestore
-          .collection('attendance')
-          .where('subjectId', isEqualTo: state.selectedSubjectId)
-          .where('dateKey', isEqualTo: dateKey)
-          .get();
+      final token = await _getToken();
+      final dateKey = DateFormat('yyyy-MM-dd').format(state.selectedDate);
 
-      final Map<String, DocumentReference> existingDocsMap = {};
-      for (var doc in existingQuery.docs) {
-        existingDocsMap[doc['uid']] = doc.reference;
-      }
+      final response = await http
+          .post(
+            Uri.parse('${ApiConfig.baseUrl}/manual-attendance/save'),
+            headers: {
+              'Authorization': 'Bearer $token',
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: jsonEncode({
+              'subject_id': state.selectedSubjectId,
+              'session_id': state.activeSessionId,
+              'date': dateKey,
+              'attendance_data': state.attendanceStatus,
+            }),
+          )
+          .timeout(const Duration(seconds: 20));
 
-      for (var student in state.students) {
-        final uid = student.id;
-        if (!state.attendanceStatus.containsKey(uid)) continue;
-
-        final status = state.attendanceStatus[uid]!;
-        final uniqueKey =
-            "ATT_${uid}_${state.selectedSubjectId}_$uniqueDateSuffix";
-
-        if (existingDocsMap.containsKey(uid)) {
-          batch.update(existingDocsMap[uid]!, {
-            'status': status,
-            'method': 'ADMIN_MANUAL',
-            'timestamp': FieldValue.serverTimestamp(),
-          });
-        } else {
-          final newDocRef = _firestore.collection('attendance').doc();
-          batch.set(newDocRef, {
-            'uid': uid,
-            'sessionId': state.activeSessionId,
-            'subjectId': state.selectedSubjectId,
-            'uniqueSessionKey': uniqueKey,
-            'timestamp': FieldValue.serverTimestamp(),
-            'dateKey': dateKey,
-            'status': status,
-            'deviceInfo': 'Admin Console',
-            'method': 'ADMIN_MANUAL',
-          });
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        state = state.copyWith(isLoading: false);
+        if (context.mounted) {
+          Navigator.pop(context);
+          Navigator.pop(context);
+          CustomToast.show(context, "Attendance Records Updated Successfully");
         }
-      }
-
-      await batch.commit();
-      state = state.copyWith(isLoading: false);
-      if (context.mounted) {
-        Navigator.pop(context);
-        Navigator.pop(context);
-        CustomToast.show(context, "Attendance Records Updated Successfully");
+      } else {
+        throw Exception(
+          jsonDecode(response.body)['message'] ?? "Failed to save",
+        );
       }
     } catch (e) {
       state = state.copyWith(
@@ -282,13 +295,12 @@ class _AdminManualAttendanceScreenState
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-
     final state = ref.watch(manualAttendanceProvider);
     final controller = ref.read(manualAttendanceProvider.notifier);
 
     ref.listen(manualAttendanceProvider, (previous, next) {
       if (next.errorMessage != null && next.errorMessage!.isNotEmpty) {
-        CustomToast.show(context, next.errorMessage!);
+        CustomToast.show(context, next.errorMessage!, isError: true);
       }
     });
 
@@ -522,10 +534,10 @@ class _AdminManualAttendanceScreenState
                   state.selectedSemester != null) {
                 _showSubjectSheet(controller, state);
               } else {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text("Please select Course and Semester first"),
-                  ),
+                CustomToast.show(
+                  context,
+                  "Please select Course and Semester first",
+                  isError: true,
                 );
               }
             },
@@ -542,7 +554,7 @@ class _AdminManualAttendanceScreenState
       isScrollControlled: true,
       builder: (context) => _SelectionSheet(
         title: "Select Course",
-        collection: 'courses',
+        apiUrl: "${ApiConfig.baseUrl}/courses",
         onSelect: (id, name) => controller.setCourse(id, name),
       ),
     );
@@ -598,11 +610,8 @@ class _AdminManualAttendanceScreenState
       isScrollControlled: true,
       builder: (context) => _SelectionSheet(
         title: "Select Subject",
-        collection: 'subjects',
-        queryModifier: (query) => query
-            .where('courseId', isEqualTo: state.selectedCourseId)
-            .where('semester', isEqualTo: state.selectedSemester)
-            .where('sessionId', isEqualTo: state.activeSessionId),
+        apiUrl:
+            "${ApiConfig.baseUrl}/subjects?course_id=${state.selectedCourseId}&semester=${state.selectedSemester}&session_id=${state.activeSessionId}",
         onSelect: (id, name) => controller.setSubject(id, name),
       ),
     );
@@ -651,15 +660,14 @@ class _AdminManualAttendanceScreenState
             separatorBuilder: (_, __) => const SizedBox(height: 12),
             itemBuilder: (context, index) {
               final student = state.students[index];
-              final data = student.data() as Map<String, dynamic>;
-              final uid = student.id;
+              final uid = student['id'].toString();
               final status = state.attendanceStatus[uid];
               final isPresent = status == 'Present';
 
               return _StudentAttendanceCard(
-                name: data['name'] ?? "Unknown",
-                rollNo: data['rollNumber'] ?? "---",
-                imageUrl: data['profileUrl'],
+                name: student['name'] ?? "Unknown",
+                rollNo: student['roll_number']?.toString() ?? "---",
+                imageUrl: student['profile_pic'],
                 isPresent: isPresent,
                 onToggle: () => controller.toggleStudentStatus(uid),
               );
@@ -709,7 +717,6 @@ class AttendanceSummaryScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-
     final state = ref.watch(manualAttendanceProvider);
     final controller = ref.read(manualAttendanceProvider.notifier);
 
@@ -1081,7 +1088,6 @@ class _StudentAttendanceCard extends StatelessWidget {
               ),
               child: Stack(
                 children: [
-                  // Background Labels (Static)
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 12),
                     child: Row(
@@ -1110,7 +1116,6 @@ class _StudentAttendanceCard extends StatelessWidget {
                       ],
                     ),
                   ),
-                  // Moving Toggle Ball with Text
                   AnimatedAlign(
                     duration: const Duration(milliseconds: 300),
                     curve: Curves.elasticOut,
@@ -1118,7 +1123,7 @@ class _StudentAttendanceCard extends StatelessWidget {
                         ? Alignment.centerRight
                         : Alignment.centerLeft,
                     child: Container(
-                      width: 60, // Ball ki jagah ab ye pill shape hai
+                      width: 60,
                       height: 38,
                       margin: const EdgeInsets.symmetric(horizontal: 3),
                       decoration: BoxDecoration(
@@ -1188,26 +1193,66 @@ class _ActionTextBtn extends StatelessWidget {
   }
 }
 
-class _SelectionSheet extends StatelessWidget {
+class _SelectionSheet extends StatefulWidget {
   final String title;
-  final String collection;
-  final Query Function(Query)? queryModifier;
+  final String apiUrl;
   final Function(String, String) onSelect;
 
   const _SelectionSheet({
     required this.title,
-    required this.collection,
-    this.queryModifier,
+    required this.apiUrl,
     required this.onSelect,
   });
 
   @override
-  Widget build(BuildContext context) {
-    Query query = FirebaseFirestore.instance.collection(collection);
-    if (queryModifier != null) {
-      query = queryModifier!(query);
-    }
+  State<_SelectionSheet> createState() => _SelectionSheetState();
+}
 
+class _SelectionSheetState extends State<_SelectionSheet> {
+  List<dynamic> _items = [];
+  bool _isLoading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchData();
+  }
+
+  Future<void> _fetchData() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('auth_token');
+      final response = await http.get(
+        Uri.parse(widget.apiUrl),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Accept': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        setState(() {
+          _items = data['data'] ?? data['subjects'] ?? [];
+          _isLoading = false;
+        });
+      } else {
+        setState(() {
+          _error = "Failed to load data";
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _error = "Network error";
+        _isLoading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
       constraints: BoxConstraints(
         maxHeight: MediaQuery.of(context).size.height * 0.7,
@@ -1221,85 +1266,89 @@ class _SelectionSheet extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            title,
+            widget.title,
             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 24),
           Flexible(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: query.snapshots(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                  return Center(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _error != null
+                ? Center(
+                    child: Text(
+                      _error!,
+                      style: const TextStyle(color: Colors.red),
+                    ),
+                  )
+                : _items.isEmpty
+                ? Center(
                     child: Text(
                       "No items found",
                       style: TextStyle(color: Colors.grey[400]),
                     ),
-                  );
-                }
-                return ListView.separated(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 8,
-                  ),
-                  itemCount: snapshot.data!.docs.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 12),
-                  itemBuilder: (context, index) {
-                    final doc = snapshot.data!.docs[index];
-                    final name = doc['name'] ?? 'Unknown';
-                    final code = (doc.data() as Map).containsKey('code')
-                        ? "${doc['code']} - "
-                        : "";
+                  )
+                : ListView.separated(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 8,
+                    ),
+                    itemCount: _items.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    itemBuilder: (context, index) {
+                      final item = _items[index];
+                      final id = item['id'].toString();
+                      final name =
+                          item['name'] ?? item['subject_name'] ?? 'Unknown';
+                      final code =
+                          item.containsKey('code') ||
+                              item.containsKey('subject_code')
+                          ? "${item['code'] ?? item['subject_code']} - "
+                          : "";
 
-                    return GestureDetector(
-                      onTap: () {
-                        onSelect(doc.id, name);
-                        Navigator.pop(context);
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF8F9FD),
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(
-                            color: Colors.black.withOpacity(0.03),
-                          ),
-                        ),
-                        child: Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: const Icon(
-                                Icons.arrow_forward_ios_rounded,
-                                size: 12,
-                                color: Colors.black,
-                              ),
+                      return GestureDetector(
+                        onTap: () {
+                          widget.onSelect(id, name);
+                          Navigator.pop(context);
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF8F9FD),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                              color: Colors.black.withOpacity(0.03),
                             ),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: Text(
-                                "$code$name",
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 13,
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: const Icon(
+                                  Icons.arrow_forward_ios_rounded,
+                                  size: 12,
+                                  color: Colors.black,
                                 ),
                               ),
-                            ),
-                          ],
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: Text(
+                                  "$code$name",
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
+                      );
+                    },
+                  ),
           ),
         ],
       ),

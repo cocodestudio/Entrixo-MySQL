@@ -1,5 +1,8 @@
 import 'dart:ui';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:entrixo/auth/change_password.dart';
+import 'package:entrixo/screens/about_screen.dart';
+import 'package:entrixo/screens/help_support_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shimmer/shimmer.dart';
@@ -12,7 +15,7 @@ class CustomDrawer extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final profileState = ref.watch(profileControllerProvider);
+    final profileAsync = ref.watch(userProfileProvider);
     final theme = Theme.of(context);
     final size = MediaQuery.of(context).size;
 
@@ -41,13 +44,22 @@ class CustomDrawer extends ConsumerWidget {
                   width: 1.5,
                 ),
               ),
-              child: Column(
-                children: [
-                  _buildProfileHeader(context, profileState, theme, size),
-                  const SizedBox(height: 8),
-                  Expanded(child: _buildMenuItems(context, theme)),
-                  _buildLogoutButton(context, ref, theme),
-                ],
+              child: profileAsync.when(
+                data: (profileState) => Column(
+                  children: [
+                    _buildProfileHeader(context, profileState, theme, size),
+                    const SizedBox(height: 8),
+                    Expanded(child: _buildMenuItems(context, theme)),
+                    _buildLogoutButton(context, ref, theme),
+                  ],
+                ),
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (err, stack) => Center(
+                  child: Text(
+                    "Error loading profile",
+                    style: TextStyle(color: Colors.red[400]),
+                  ),
+                ),
               ),
             ),
           ),
@@ -58,10 +70,12 @@ class CustomDrawer extends ConsumerWidget {
 
   Widget _buildProfileHeader(
     BuildContext context,
-    dynamic profileState,
+    ProfileState profileState,
     ThemeData theme,
     Size size,
   ) {
+    final bool isStudent = profileState.role == 'student';
+
     return Container(
       width: double.infinity,
       padding: EdgeInsets.fromLTRB(
@@ -130,7 +144,7 @@ class CustomDrawer extends ConsumerWidget {
                           (profileState.profileUrl != null &&
                               profileState.profileUrl!.isNotEmpty)
                           ? profileState.profileUrl!
-                          : 'https://ui-avatars.com/api/?name=${Uri.encodeComponent(profileState.name.isEmpty ? "User" : profileState.name)}&background=6366F1&color=fff&size=256',
+                          : 'https://ui-avatars.com/api/?name=${Uri.encodeComponent(profileState.name.isEmpty ? (isStudent ? "Student" : "Admin") : profileState.name)}&background=6366F1&color=fff&size=256',
                       fit: BoxFit.cover,
                       placeholder: (context, url) => Shimmer.fromColors(
                         baseColor: Colors.grey[300]!,
@@ -183,7 +197,9 @@ class CustomDrawer extends ConsumerWidget {
           ),
           const SizedBox(height: 20),
           Text(
-            profileState.name.isEmpty ? "Loading..." : profileState.name,
+            profileState.name.isEmpty
+                ? (isStudent ? "Student" : "Admin")
+                : profileState.name,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.center,
@@ -194,7 +210,41 @@ class CustomDrawer extends ConsumerWidget {
               letterSpacing: -0.5,
             ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 4),
+
+          // Role-based rendering: Roll Number sirf Student ko dikhega
+          if (isStudent) ...[
+            Text(
+              "Roll No: ${profileState.rollNumber}",
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: theme.primaryColor.withOpacity(0.7),
+                letterSpacing: 0.5,
+              ),
+            ),
+            const SizedBox(height: 12),
+          ] else ...[
+            // Admin ke liye chhota sa badge ya spacing
+            Container(
+              margin: const EdgeInsets.only(top: 4, bottom: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.orange.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Text(
+                "ADMINISTRATOR",
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.orange,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ],
+
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             decoration: BoxDecoration(
@@ -249,19 +299,16 @@ class CustomDrawer extends ConsumerWidget {
           theme: theme,
         ),
         _DrawerItem(
-          icon: Icons.notifications_outlined,
-          label: "Notifications",
+          icon: Icons.password_rounded,
+          label: "Change Password",
           onTap: () {
             Navigator.pop(context);
-          },
-          theme: theme,
-          badge: "3",
-        ),
-        _DrawerItem(
-          icon: Icons.settings_outlined,
-          label: "Settings",
-          onTap: () {
-            Navigator.pop(context);
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const ChangePasswordScreen(),
+              ),
+            );
           },
           theme: theme,
         ),
@@ -285,6 +332,12 @@ class CustomDrawer extends ConsumerWidget {
           label: "Help & Support",
           onTap: () {
             Navigator.pop(context);
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const HelpSupportScreen(),
+              ),
+            );
           },
           theme: theme,
         ),
@@ -293,6 +346,10 @@ class CustomDrawer extends ConsumerWidget {
           label: "About",
           onTap: () {
             Navigator.pop(context);
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => const AboutScreen()),
+            );
           },
           theme: theme,
         ),
@@ -373,8 +430,7 @@ class CustomDrawer extends ConsumerWidget {
           ),
           TextButton(
             onPressed: () {
-              Navigator.pop(context);
-              ref.read(authControllerProvider.notifier).logout(context);
+              ref.read(authControllerProvider.notifier).logout(context, ref);
             },
             child: const Text(
               "Logout",

@@ -14,19 +14,26 @@ class ProfileScreen extends ConsumerStatefulWidget {
 class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   late TextEditingController _nameController;
   late TextEditingController _emailController;
+  late TextEditingController _phoneController;
+  late TextEditingController _rollController;
+
+  bool _isInitialized = false;
 
   @override
   void initState() {
     super.initState();
-    final state = ref.read(profileControllerProvider);
-    _nameController = TextEditingController(text: state.name);
-    _emailController = TextEditingController(text: state.email);
+    _nameController = TextEditingController();
+    _emailController = TextEditingController();
+    _phoneController = TextEditingController();
+    _rollController = TextEditingController();
   }
 
   @override
   void dispose() {
     _nameController.dispose();
     _emailController.dispose();
+    _phoneController.dispose();
+    _rollController.dispose();
     super.dispose();
   }
 
@@ -35,10 +42,15 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     final state = ref.watch(profileControllerProvider);
     final theme = Theme.of(context);
 
-    if (_nameController.text.isEmpty && state.name.isNotEmpty) {
+    if (!_isInitialized && state.name.isNotEmpty) {
       _nameController.text = state.name;
       _emailController.text = state.email;
+      _phoneController.text = state.phoneNumber;
+      _rollController.text = state.rollNumber;
+      _isInitialized = true;
     }
+
+    final bool isStudent = state.role == 'student';
 
     return Scaffold(
       backgroundColor: const Color(0xFFF7F8FA),
@@ -47,7 +59,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         systemOverlayStyle: const SystemUiOverlayStyle(
           statusBarColor: Colors.transparent,
           statusBarIconBrightness: Brightness.dark,
-          statusBarBrightness: Brightness.light,
         ),
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -64,14 +75,17 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           "Edit Profile",
           style: theme.textTheme.titleLarge?.copyWith(
             fontWeight: FontWeight.w700,
-            fontSize: 16
+            fontSize: 16,
+            color: Colors.black,
           ),
         ),
       ),
-      body: state.isLoading && state.name.isEmpty
+      body:
+          state.name.isEmpty && !state.isLoading && _nameController.text.isEmpty
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(24, 120, 24, 24),
+              physics: const BouncingScrollPhysics(),
               child: Column(
                 children: [
                   Center(
@@ -85,35 +99,13 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                             border: Border.all(color: Colors.white, width: 4),
                             boxShadow: [
                               BoxShadow(
-                                color: theme.primaryColor.withOpacity(0.2),
+                                color: theme.primaryColor.withOpacity(0.15),
                                 blurRadius: 20,
                                 offset: const Offset(0, 10),
                               ),
                             ],
                           ),
-                          child: ClipOval(
-                            child: state.pickedImage != null
-                                ? Image.file(
-                                    state.pickedImage!,
-                                    fit: BoxFit.cover,
-                                  )
-                                : (state.profileUrl != null &&
-                                      state.profileUrl!.isNotEmpty)
-                                ? Image.network(
-                                    state.profileUrl!,
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (context, error, stackTrace) {
-                                      return Image.network(
-                                        'https://ui-avatars.com/api/?name=${state.name.isNotEmpty ? state.name : "User"}&background=6366F1&color=fff',
-                                        fit: BoxFit.cover,
-                                      );
-                                    },
-                                  )
-                                : Image.network(
-                                    'https://ui-avatars.com/api/?name=${state.name.isNotEmpty ? state.name : "User"}&background=6366F1&color=fff',
-                                    fit: BoxFit.cover,
-                                  ),
-                          ),
+                          child: ClipOval(child: _buildProfileImage(state)),
                         ),
                         Positioned(
                           bottom: 0,
@@ -121,7 +113,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                           child: GestureDetector(
                             onTap: () => ref
                                 .read(profileControllerProvider.notifier)
-                                .pickImage(context),
+                                .pickImage(),
                             child: Container(
                               height: 40,
                               width: 40,
@@ -159,6 +151,24 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                     theme: theme,
                     isEmail: true,
                   ),
+                  const SizedBox(height: 20),
+                  if (isStudent) ...[
+                    _buildTextField(
+                      controller: _phoneController,
+                      label: "Phone Number",
+                      icon: Icons.phone_outlined,
+                      theme: theme,
+                      isReadOnly: true,
+                    ),
+                    const SizedBox(height: 20),
+                    _buildTextField(
+                      controller: _rollController,
+                      label: "Roll Number",
+                      icon: Icons.badge_outlined,
+                      theme: theme,
+                      isReadOnly: true,
+                    ),
+                  ],
                   const SizedBox(height: 50),
                   SizedBox(
                     width: double.infinity,
@@ -171,9 +181,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                               ref
                                   .read(profileControllerProvider.notifier)
                                   .saveProfile(
-                                    context,
-                                    _nameController.text.trim(),
-                                    _emailController.text.trim(),
+                                    newName: _nameController.text.trim(),
+                                    newEmail: _emailController.text.trim(),
                                     onSuccess: () {
                                       CustomToast.show(
                                         context,
@@ -194,8 +203,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(16),
                         ),
-                        elevation: 5,
-                        shadowColor: theme.primaryColor.withOpacity(0.4),
+                        elevation: 0,
                       ),
                       child: state.isLoading
                           ? const SizedBox(
@@ -203,7 +211,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                               width: 24,
                               child: CircularProgressIndicator(
                                 color: Colors.white,
-                                strokeWidth: 2.5,
+                                strokeWidth: 2,
                               ),
                             )
                           : const Text(
@@ -222,12 +230,41 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     );
   }
 
+  Widget _buildProfileImage(ProfileState state) {
+    if (state.pickedImage != null) {
+      return Image.file(state.pickedImage!, fit: BoxFit.cover, key: UniqueKey());
+    }
+
+    if (state.profileUrl != null && state.profileUrl!.isNotEmpty) {
+      return Image.network(
+        state.profileUrl!,
+        key: ValueKey(state.profileUrl),
+        fit: BoxFit.cover,
+        loadingBuilder: (context, child, loadingProgress) {
+          if (loadingProgress == null) return child;
+          return const Center(child: CircularProgressIndicator());
+        },
+        errorBuilder: (context, error, stackTrace) => _fallbackAvatar(state.name),
+      );
+    }
+
+    return _fallbackAvatar(state.name);
+  }
+
+  Widget _fallbackAvatar(String name) {
+    return Image.network(
+      'https://ui-avatars.com/api/?name=${name.isNotEmpty ? name : "User"}&background=6366F1&color=fff',
+      fit: BoxFit.cover,
+    );
+  }
+
   Widget _buildTextField({
     required TextEditingController controller,
     required String label,
     required IconData icon,
     required ThemeData theme,
     bool isEmail = false,
+    bool isReadOnly = false,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -242,22 +279,21 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         const SizedBox(height: 8),
         Container(
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: isReadOnly ? const Color(0xFFF3F4F6) : Colors.white,
             borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.grey.withOpacity(0.05),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
-              ),
-            ],
+            border: Border.all(color: Colors.grey.withOpacity(0.1)),
           ),
           child: TextField(
             controller: controller,
+            readOnly: isReadOnly,
             keyboardType: isEmail
                 ? TextInputType.emailAddress
                 : TextInputType.text,
-            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: 14,
+              color: isReadOnly ? Colors.grey[700] : Colors.black,
+            ),
             decoration: InputDecoration(
               prefixIcon: Icon(
                 icon,
@@ -269,7 +305,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 vertical: 16,
               ),
               hintText: "Enter your $label",
-              hintStyle: TextStyle(color: Colors.grey[400]),
             ),
           ),
         ),

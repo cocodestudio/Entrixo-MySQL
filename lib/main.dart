@@ -1,10 +1,10 @@
 import 'package:entrixo/screens/splash_screen.dart';
 import 'package:entrixo/theme/theme.dart';
 import 'package:entrixo/utils/network_manager.dart';
+import 'package:entrixo/utils/notification_service.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -12,6 +12,8 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
+  final notificationService = NotificationService();
+  await notificationService.initialize();
 
   SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
@@ -28,11 +30,6 @@ void main() async {
     ),
   );
 
-  await FirebaseAppCheck.instance.activate(
-    androidProvider: AndroidProvider.debug,
-    appleProvider: AppleProvider.debug,
-  );
-
   runApp(const ProviderScope(child: MyApp()));
 }
 
@@ -45,7 +42,6 @@ class MyApp extends StatelessWidget {
       title: 'Entrixo',
       debugShowCheckedModeBanner: false,
       themeMode: ThemeMode.light,
-
       theme: AppTheme.lightTheme.copyWith(
         pageTransitionsTheme: const PageTransitionsTheme(
           builders: {

@@ -1,36 +1,53 @@
-import 'dart:ui';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'dart:convert';
+import 'package:flutter_riverpod/legacy.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:entrixo/screens/student_assignment_screen.dart';
 import 'package:entrixo/screens/student_resources_screen.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_riverpod/legacy.dart';
-import 'package:intl/intl.dart';
 import '../screens/attendance_screen.dart';
 import '../screens/student_scanner_screen.dart';
 import 'dart:async';
+import '../utils/api_config.dart';
+import '../widgets/dashboard_shimmer.dart';
 
 class DashboardState {
   final bool isLoading;
   final String userName;
+  final double percentage;
+  final int total;
+  final int present;
+  final int absent;
   final List<Map<String, dynamic>> upcomingSessions;
 
   DashboardState({
     required this.isLoading,
     required this.userName,
+    this.percentage = 0.0,
+    this.total = 0,
+    this.present = 0,
+    this.absent = 0,
     this.upcomingSessions = const [],
   });
 
   DashboardState copyWith({
     bool? isLoading,
     String? userName,
+    double? percentage,
+    int? total,
+    int? present,
+    int? absent,
     List<Map<String, dynamic>>? upcomingSessions,
   }) {
     return DashboardState(
       isLoading: isLoading ?? this.isLoading,
       userName: userName ?? this.userName,
+      percentage: percentage ?? this.percentage,
+      total: total ?? this.total,
+      present: present ?? this.present,
+      absent: absent ?? this.absent,
       upcomingSessions: upcomingSessions ?? this.upcomingSessions,
     );
   }
@@ -42,128 +59,69 @@ final dashboardControllerProvider =
     });
 
 class DashboardController extends StateNotifier<DashboardState> {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-
   DashboardController()
-    : super(
-        DashboardState(
-          isLoading: true,
-          userName: 'Student',
-          upcomingSessions: [],
-        ),
-      ) {
+    : super(DashboardState(isLoading: true, userName: 'Student')) {
     initData();
   }
 
   Future<void> initData() async {
     try {
-      final user = _auth.currentUser;
-      if (user == null) return;
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('auth_token');
 
-      final userDoc = await _firestore.collection('users').doc(user.uid).get();
-      final userData = userDoc.data();
-      if (userData == null) return;
+      if (token == null) return;
 
-      final String name = userData['name'] ?? 'Student';
-      final String courseId = userData['courseId'];
-      final int semester = userData['currentSemester'] ?? 1;
+      final userResponse = await http.get(
+        Uri.parse('${ApiConfig.baseUrl}/me'),
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
 
-      final activeSessionQuery = await _firestore
-          .collection('academic_sessions')
-          .where('status', isEqualTo: 'Active')
-          .limit(1)
-          .get();
-
-      if (activeSessionQuery.docs.isEmpty) {
-        if (mounted) state = state.copyWith(isLoading: false, userName: name);
-        return;
+      String fetchedName = 'Student';
+      if (userResponse.statusCode == 200) {
+        fetchedName =
+            jsonDecode(userResponse.body)['user']['name'] ?? 'Student';
       }
-      final String sessionId = activeSessionQuery.docs.first.id;
 
-      await _fetchUpcomingSessions(courseId, semester, sessionId);
+      final dashboardResponse = await http.get(
+        Uri.parse('${ApiConfig.baseUrl}/student/dashboard'),
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
 
-      if (mounted) {
-        state = state.copyWith(isLoading: false, userName: name);
+      if (dashboardResponse.statusCode == 200) {
+        final data = jsonDecode(dashboardResponse.body)['data'];
+        final attendance = data['attendance'];
+
+        if (mounted) {
+          state = state.copyWith(
+            isLoading: false,
+            userName: fetchedName,
+            total: attendance['total'],
+            present: attendance['present'],
+            absent: attendance['absent'],
+            percentage: (attendance['percentage'] as num).toDouble(),
+            upcomingSessions: List<Map<String, dynamic>>.from(
+              data['upcoming_sessions'] ?? [],
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          state = state.copyWith(isLoading: false, userName: fetchedName);
+        }
       }
     } catch (e) {
       if (mounted) state = state.copyWith(isLoading: false);
     }
   }
 
-  Future<void> _fetchUpcomingSessions(
-    String courseId,
-    int semester,
-    String sessionId,
-  ) async {
-    final subjectsQuery = await _firestore
-        .collection('subjects')
-        .where('courseId', isEqualTo: courseId)
-        .where('semester', isEqualTo: semester)
-        .where('sessionId', isEqualTo: sessionId)
-        .get();
-
-    List<Map<String, dynamic>> allFutureSessions = [];
-    DateTime now = DateTime.now();
-
-    for (var subDoc in subjectsQuery.docs) {
-      final subData = subDoc.data();
-      final List schedule = subData['schedule'] ?? [];
-
-      for (var session in schedule) {
-        if (session['date'] is! Timestamp) continue;
-
-        final DateTime sessionDate = (session['date'] as Timestamp).toDate();
-        final String startTimeStr = session['startTime'];
-        final String endTimeStr = session['endTime'];
-
-        DateTime fullStart;
-        DateTime fullEnd;
-        try {
-          final sParts = startTimeStr.split(':');
-          final eParts = endTimeStr.split(':');
-          fullStart = DateTime(
-            sessionDate.year,
-            sessionDate.month,
-            sessionDate.day,
-            int.parse(sParts[0]),
-            int.parse(sParts[1]),
-          );
-          fullEnd = DateTime(
-            sessionDate.year,
-            sessionDate.month,
-            sessionDate.day,
-            int.parse(eParts[0]),
-            int.parse(eParts[1]),
-          );
-        } catch (e) {
-          fullStart = sessionDate;
-          fullEnd = sessionDate.add(const Duration(hours: 2));
-        }
-
-        if (now.isBefore(fullEnd)) {
-          allFutureSessions.add({
-            'subject': subData['name'],
-            'code': subData['code'],
-            'time': "$startTimeStr - $endTimeStr",
-            'rawDateTime': fullStart,
-            'displayDate': DateFormat('EEE, dd MMM').format(sessionDate),
-            'isToday': DateUtils.isSameDay(sessionDate, now),
-            'room': 'Lab',
-          });
-        }
-      }
-    }
-
-    allFutureSessions.sort(
-      (a, b) => a['rawDateTime'].compareTo(b['rawDateTime']),
-    );
-
-    if (mounted) {
-      state = state.copyWith(
-        upcomingSessions: allFutureSessions.take(3).toList(),
-      );
-    }
+  Future<void> refresh() async {
+    await initData();
   }
 }
 
@@ -181,23 +139,33 @@ class StudentDashboardContent extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(dashboardControllerProvider);
 
-    if (state.isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    return SingleChildScrollView(
-      physics: const BouncingScrollPhysics(),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 24),
+    return RefreshIndicator(
+      onRefresh: () async {
+        await ref.read(dashboardControllerProvider.notifier).refresh();
+      },
+      color: theme.primaryColor,
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(
+          parent: ClampingScrollPhysics(),
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const SizedBox(height: 24),
-            LiveAttendanceCard(theme: theme),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: LiveAttendanceCard(theme: theme),
+            ),
             const SizedBox(height: 32),
-            PrimaryActionButton(theme: theme),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: PrimaryActionButton(theme: theme),
+            ),
             const SizedBox(height: 32),
-            QuickActionsSection(theme: theme),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: QuickActionsSection(theme: theme),
+            ),
             const SizedBox(height: 32),
             NextSessionSection(theme: theme, sessions: state.upcomingSessions),
             const SizedBox(height: 100),
@@ -214,42 +182,14 @@ class LiveAttendanceCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final selectedId = ref.watch(selectedSessionProvider);
-    final attendanceAsync = ref.watch(attendanceProvider(selectedId));
+    final state = ref.watch(dashboardControllerProvider);
 
-    return attendanceAsync.when(
-      data: (data) {
-        final int absent = data.totalClasses - data.totalPresent;
-        return StatsGlassCard(
-          theme: theme,
-          percentage: data.overallPercentage,
-          total: data.totalClasses,
-          present: data.totalPresent,
-          absent: absent < 0 ? 0 : absent,
-        );
-      },
-      loading: () => _buildLoadingState(theme),
-      error: (err, stack) => StatsGlassCard(
-        theme: theme,
-        percentage: 0.0,
-        total: 0,
-        present: 0,
-        absent: 0,
-      ),
-    );
-  }
-
-  Widget _buildLoadingState(ThemeData theme) {
-    return Container(
-      height: 220,
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: const Color(0xFF1A1A1A),
-        borderRadius: BorderRadius.circular(32),
-      ),
-      child: const Center(
-        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
-      ),
+    return StatsGlassCard(
+      theme: theme,
+      percentage: state.percentage,
+      total: state.total,
+      present: state.present,
+      absent: state.absent,
     );
   }
 }
@@ -441,21 +381,24 @@ class NextSessionSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (sessions.isEmpty) {
-      return _buildEmptyState();
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: _buildEmptyState(),
+      );
     }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 24),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text(
                 'Upcoming Sessions',
                 style: TextStyle(
-                  fontSize: 18,
+                  fontSize: 16,
                   fontWeight: FontWeight.w800,
                   color: Color(0xFF1A1A1A),
                   letterSpacing: -0.5,
@@ -484,10 +427,12 @@ class NextSessionSection extends StatelessWidget {
         ),
         const SizedBox(height: 16),
         SizedBox(
-          height: 155,
+          height: 165,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
-            physics: const BouncingScrollPhysics(),
+            physics: const ClampingScrollPhysics(),
+            clipBehavior: Clip.none,
+            padding: const EdgeInsets.symmetric(horizontal: 24),
             itemCount: sessions.length,
             separatorBuilder: (context, index) => const SizedBox(width: 16),
             itemBuilder: (context, index) {
@@ -496,6 +441,7 @@ class NextSessionSection extends StatelessWidget {
 
               return Container(
                 width: 280,
+                margin: const EdgeInsets.only(bottom: 10),
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
                   color: const Color(0xFF1A1A1A),
@@ -503,8 +449,8 @@ class NextSessionSection extends StatelessWidget {
                   boxShadow: [
                     BoxShadow(
                       color: Colors.black.withOpacity(0.2),
-                      blurRadius: 15,
-                      offset: const Offset(5, 5),
+                      blurRadius: 10,
+                      offset: const Offset(3, 5),
                     ),
                   ],
                 ),
@@ -640,19 +586,20 @@ class NextSessionSection extends StatelessWidget {
   }
 }
 
-class PrimaryActionButton extends StatelessWidget {
+class PrimaryActionButton extends ConsumerWidget {
   final ThemeData theme;
   const PrimaryActionButton({super.key, required this.theme});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return GestureDetector(
-      onTap: () {
+      onTap: () async {
         HapticFeedback.mediumImpact();
-        Navigator.push(
+        await Navigator.push(
           context,
           MaterialPageRoute(builder: (context) => const StudentScannerScreen()),
         );
+        ref.read(dashboardControllerProvider.notifier).refresh();
       },
       child: Container(
         width: double.infinity,

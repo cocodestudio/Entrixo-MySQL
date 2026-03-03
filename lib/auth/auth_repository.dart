@@ -1,48 +1,14 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'dart:io';
+import '../utils/api_config.dart';
 
-final authRepositoryProvider = Provider(
-  (ref) => AuthRepository(
-    auth: FirebaseAuth.instance,
-    firestore: FirebaseFirestore.instance,
-  ),
-);
+final authRepositoryProvider = Provider((ref) => AuthRepository());
 
 class AuthRepository {
-  final FirebaseAuth auth;
-  final FirebaseFirestore firestore;
-
-  AuthRepository({required this.auth, required this.firestore});
-
-  Future<void> verifyPhoneNumber(
-    String phoneNumber, {
-    required Function(String) onCodeSent,
-    required Function(FirebaseAuthException) onError,
-  }) async {
-    await auth.verifyPhoneNumber(
-      phoneNumber: '+91$phoneNumber',
-      verificationCompleted: (PhoneAuthCredential credential) async {
-        await auth.signInWithCredential(credential);
-      },
-      verificationFailed: onError,
-      codeSent: (String verificationId, int? resendToken) {
-        onCodeSent(verificationId);
-      },
-      codeAutoRetrievalTimeout: (String verificationId) {},
-    );
-  }
-
-  Future<UserCredential> verifyOTP(String verificationId, String otp) async {
-    PhoneAuthCredential credential = PhoneAuthProvider.credential(
-      verificationId: verificationId,
-      smsCode: otp,
-    );
-    return await auth.signInWithCredential(credential);
-  }
-
   Future<String> getDeviceId() async {
     DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
     if (Platform.isAndroid) {
@@ -54,19 +20,54 @@ class AuthRepository {
     }
   }
 
-  Future<void> saveUserData({required String role, required User user}) async {
+  Future<Map<String, dynamic>> loginWithEmailPassword(
+    String loginId,
+    String password,
+  ) async {
     final deviceId = await getDeviceId();
-    final userDoc = await firestore.collection('users').doc(user.uid).get();
 
-    if (!userDoc.exists) {
-      await firestore.collection('users').doc(user.uid).set({
-        'uid': user.uid,
-        'phoneNumber': user.phoneNumber,
-        'role': role,
-        'deviceId': deviceId,
-        'isSetupCompleted': false,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+    final response = await http.post(
+      Uri.parse(ApiConfig.login),
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: jsonEncode({
+        'login_id': loginId,
+        'password': password,
+        'device_name': deviceId,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('auth_token', data['token']);
+      await prefs.setString('user_role', data['user']['role']);
+
+      return data;
+    } else {
+      final errorData = jsonDecode(response.body);
+      throw Exception(errorData['message'] ?? "Login Failed");
     }
+  }
+
+  Future<void> logout() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('auth_token');
+
+    if (token != null) {
+      try {
+        await http.post(
+          Uri.parse('${ApiConfig.baseUrl}/logout'),
+          headers: {
+            'Authorization': 'Bearer $token',
+            'Accept': 'application/json',
+          },
+        );
+      } catch (e) {}
+    }
+
+    await prefs.clear();
   }
 }

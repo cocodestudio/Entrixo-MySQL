@@ -1,4 +1,5 @@
 import 'package:entrixo/admin/add_student_screen.dart';
+import 'package:entrixo/admin/admin_daily_attendance_view.dart';
 import 'package:entrixo/admin/admin_manual_attendance.dart';
 import 'package:entrixo/admin/daily_headcount_screen.dart';
 import 'package:entrixo/admin/lab_management_screen.dart';
@@ -57,18 +58,15 @@ class AdminToolsScreen extends StatelessWidget {
             sliver: SliverList(
               delegate: SliverChildListDelegate([
                 _HeroActionCard(
-                  title: "QR Code Generates",
-                  subtitle: "Generate QR for attendance",
-                  icon: Icons.qr_code_scanner_rounded,
-                  gradientColors: [
-                    theme.primaryColor,
-                    theme.primaryColor.withBlue(200),
-                  ],
+                  title: "Attendance Reports",
+                  subtitle: "Download CSV & Analytics",
+                  icon: Icons.bar_chart_rounded,
+                  gradientColors: const [Color(0xFFFF9999), Color(0xFFFDD12E)],
                   onTap: () {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (context) => const QRGeneratorScreen(),
+                        builder: (context) => const DailyHeadcountScreen(),
                       ),
                     );
                   },
@@ -124,15 +122,18 @@ class AdminToolsScreen extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
             sliver: SliverToBoxAdapter(
               child: _WideActionCard(
-                title: "Attendance Reports",
-                subtitle: "Download CSV & Analytics",
+                title: "Lab Attendance",
+                subtitle: "View Daily lab Attendance Reports",
                 icon: Icons.bar_chart_rounded,
-                gradientColors: const [Color(0xFFFF9F43), Color(0xFFFFB74D)],
+                gradientColors: [
+                  theme.primaryColor,
+                  theme.primaryColor.withBlue(200),
+                ],
                 onTap: () {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (context) => const DailyHeadcountScreen(),
+                      builder: (context) => const AdminDailyAttendanceView(),
                     ),
                   );
                 },
@@ -193,7 +194,7 @@ class AdminToolsScreen extends StatelessWidget {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (context) => const ManageFacultyScreen(),
+                        builder: (context) => const AddAdminScreen(),
                       ),
                     );
                   },
@@ -251,25 +252,25 @@ class AdminToolsScreen extends StatelessWidget {
                   },
                 ),
 
-                // 7. Exams (New)
-                _GridActionCard(
-                  title: "Exams &\nResults",
-                  subtitle: "Grading",
-                  icon: Icons.grade_rounded,
-                  gradientColors: const [Color(0xFF0984e3), Color(0xFF74b9ff)],
-                  isSmall: true,
-                  onTap: () {},
-                ),
-
-                // 8. Holidays (New)
-                _GridActionCard(
-                  title: "Holiday\nCalendar",
-                  subtitle: "Events",
-                  icon: Icons.celebration_rounded,
-                  gradientColors: const [Color(0xFFe84393), Color(0xFFfd79a8)],
-                  isSmall: true,
-                  onTap: () {},
-                ),
+                // // 7. Exams (New)
+                // _GridActionCard(
+                //   title: "Exams &\nResults",
+                //   subtitle: "Grading",
+                //   icon: Icons.grade_rounded,
+                //   gradientColors: const [Color(0xFF0984e3), Color(0xFF74b9ff)],
+                //   isSmall: true,
+                //   onTap: () {},
+                // ),
+                //
+                // // 8. Holidays (New)
+                // _GridActionCard(
+                //   title: "Holiday\nCalendar",
+                //   subtitle: "Events",
+                //   icon: Icons.celebration_rounded,
+                //   gradientColors: const [Color(0xFFe84393), Color(0xFFfd79a8)],
+                //   isSmall: true,
+                //   onTap: () {},
+                // ),
               ]),
             ),
           ),

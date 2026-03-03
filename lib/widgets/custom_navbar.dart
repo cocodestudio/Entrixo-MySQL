@@ -15,22 +15,24 @@ class CustomNavBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final size = MediaQuery.of(context).size;
-    final bottomPadding = MediaQuery.of(context).padding.bottom;
+    final double bottomSafeGap = MediaQuery.of(context).padding.bottom;
 
     return Align(
       alignment: Alignment.bottomCenter,
       child: Container(
-        width: size.width * 0.45,
+        width: size.width * 0.40,
         height: 60,
-        margin: EdgeInsets.only(bottom: bottomPadding > 0 ? bottomPadding : 5),
+        margin: EdgeInsets.only(
+          bottom: bottomSafeGap > 0 ? bottomSafeGap + 10 : 20,
+        ),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(35),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.1),
+              color: Colors.black.withOpacity(0.15),
               blurRadius: 25,
-              offset: const Offset(0, 10),
+              offset: const Offset(0, 8),
             ),
           ],
         ),

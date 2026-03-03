@@ -1,6 +1,9 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/api_config.dart';
 import '../utils/custom_toast.dart';
 import '../widgets/geometric_loader.dart';
 
@@ -16,14 +19,125 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
   String _selectedCourseName = '';
   int _selectedCourseDuration = 4;
   int _selectedSemester = 1;
+
   bool _isLoading = false;
+  bool _isFetchingInitial = true;
+  bool _isFetchingSubjects = false;
 
   String? _viewingSessionId;
   String? _activeSessionId;
   String _viewingSessionName = "Loading...";
 
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FirebaseAuth _auth = FirebaseAuth.instance;
+  List<dynamic> _sessionsList = [];
+  List<dynamic> _coursesList = [];
+  List<dynamic> _subjectsList = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadInitialData();
+  }
+
+  Future<String?> _getToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('auth_token');
+  }
+
+  Future<void> _loadInitialData() async {
+    setState(() => _isFetchingInitial = true);
+    await Future.wait([
+      _fetchSessions(),
+      _fetchCourses(),
+    ]);
+
+    if (_sessionsList.isNotEmpty) {
+      try {
+        final activeSession = _sessionsList.firstWhere((s) => s['status'] == 'Active');
+        _activeSessionId = activeSession['id'].toString();
+        _viewingSessionId = _activeSessionId;
+        _viewingSessionName = activeSession['session_name'] ?? activeSession['sessionName'];
+      } catch (e) {
+        _activeSessionId = null;
+        _viewingSessionId = _sessionsList.first['id'].toString();
+        _viewingSessionName = _sessionsList.first['session_name'] ?? _sessionsList.first['sessionName'];
+      }
+    }
+
+    if (_coursesList.isNotEmpty && _selectedCourseId == null) {
+      _selectedCourseId = _coursesList.first['id'].toString();
+      _selectedCourseName = _coursesList.first['name'];
+      _selectedCourseDuration = int.tryParse(_coursesList.first['duration_years'].toString()) ?? 4;
+      _selectedSemester = 1;
+    }
+
+    if (mounted) {
+      setState(() => _isFetchingInitial = false);
+      _fetchSubjects();
+    }
+  }
+
+  Future<void> _fetchSessions() async {
+    try {
+      final token = await _getToken();
+      if (token == null) return;
+      final response = await http.get(
+        Uri.parse('${ApiConfig.baseUrl}/sessions'),
+        headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
+      );
+      if (response.statusCode == 200) {
+        _sessionsList = json.decode(response.body)['data'];
+      }
+    } catch (e) {
+      debugPrint(e.toString());
+    }
+  }
+
+  Future<void> _fetchCourses() async {
+    try {
+      final token = await _getToken();
+      if (token == null) return;
+      final response = await http.get(
+        Uri.parse(ApiConfig.courses),
+        headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
+      );
+      if (response.statusCode == 200) {
+        _coursesList = json.decode(response.body)['data'];
+      }
+    } catch (e) {
+      debugPrint(e.toString());
+    }
+  }
+
+  Future<void> _fetchSubjects() async {
+    if (_selectedCourseId == null || _viewingSessionId == null) return;
+
+    setState(() => _isFetchingSubjects = true);
+    try {
+      final token = await _getToken();
+      if (token == null) return;
+
+      final uri = Uri.parse(
+        '${ApiConfig.subjects}?course_id=$_selectedCourseId&semester=$_selectedSemester&session_id=$_viewingSessionId',
+      );
+
+      final response = await http.get(
+        uri,
+        headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
+      );
+
+      if (response.statusCode == 200) {
+        if (mounted) {
+          setState(() {
+            _subjectsList = json.decode(response.body)['data'];
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint(e.toString());
+    } finally {
+      if (mounted) setState(() => _isFetchingSubjects = false);
+    }
+  }
 
   Future<void> _addCourse(String name, int years) async {
     if (name.trim().isEmpty) {
@@ -33,34 +147,46 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
 
     setState(() => _isLoading = true);
     try {
-      final existing = await _firestore
-          .collection('courses')
-          .where('name', isEqualTo: name.trim())
-          .get();
+      final token = await _getToken();
+      final response = await http.post(
+        Uri.parse(ApiConfig.courses),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: json.encode({'name': name.trim(), 'duration_years': years}),
+      );
 
-      if (existing.docs.isNotEmpty) {
-        throw "Course already exists!";
+      if (response.statusCode == 201) {
+        await _fetchCourses();
+        if (mounted) {
+          Navigator.pop(context);
+          setState(() {
+            _selectedCourseId = _coursesList.last['id'].toString();
+            _selectedCourseName = _coursesList.last['name'];
+            _selectedCourseDuration = years;
+            _selectedSemester = 1;
+          });
+          _fetchSubjects();
+          _showSnack("Course added successfully!");
+        }
+      } else {
+        final error = json.decode(response.body);
+        _showSnack(error['message'] ?? "Error adding course", isError: true);
       }
-
-      await _firestore.collection('courses').add({
-        'name': name.trim(),
-        'durationYears': years,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-      if (mounted) Navigator.pop(context);
-      _showSnack("Course added successfully!");
     } catch (e) {
-      _showSnack(e.toString(), isError: true);
+      _showSnack("Network Error", isError: true);
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
   Future<void> _addSubject(
-    String name,
-    String code,
-    List<Map<String, dynamic>> schedule,
-  ) async {
+      String name,
+      String code,
+      List<Map<String, dynamic>> schedule,
+      ) async {
     if (name.trim().isEmpty || code.trim().isEmpty) {
       _showSnack("Please fill all fields", isError: true);
       return;
@@ -79,31 +205,36 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
     }
 
     try {
-      final existing = await _firestore
-          .collection('subjects')
-          .where('courseId', isEqualTo: _selectedCourseId)
-          .where('code', isEqualTo: code.trim().toUpperCase())
-          .where('sessionId', isEqualTo: _activeSessionId)
-          .get();
+      final token = await _getToken();
+      final response = await http.post(
+        Uri.parse(ApiConfig.subjects),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: json.encode({
+          'name': name.trim(),
+          'code': code.trim().toUpperCase(),
+          'course_id': _selectedCourseId,
+          'semester': _selectedSemester,
+          'session_id': _activeSessionId,
+          'schedule': schedule,
+        }),
+      );
 
-      if (existing.docs.isNotEmpty) {
-        throw "Subject code '${code.trim().toUpperCase()}' already exists in this session!";
+      if (response.statusCode == 201) {
+        await _fetchSubjects();
+        if (mounted) {
+          Navigator.pop(context);
+          _showSnack("Lab & Schedule added successfully!");
+        }
+      } else {
+        final error = json.decode(response.body);
+        _showSnack(error['message'] ?? "Error adding subject", isError: true);
+        throw Exception(error['message']);
       }
-
-      await _firestore.collection('subjects').add({
-        'name': name.trim(),
-        'code': code.trim().toUpperCase(),
-        'courseId': _selectedCourseId,
-        'semester': _selectedSemester,
-        'sessionId': _activeSessionId,
-        'schedule': schedule,
-        'createdAt': FieldValue.serverTimestamp(),
-        'createdBy': _auth.currentUser?.uid,
-      });
-      if (mounted) Navigator.pop(context);
-      _showSnack("Lab & Schedule added successfully!");
     } catch (e) {
-      _showSnack(e.toString(), isError: true);
       rethrow;
     }
   }
@@ -111,10 +242,20 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
   Future<void> _deleteSubject(String subjectId) async {
     setState(() => _isLoading = true);
     try {
-      await _firestore.collection('subjects').doc(subjectId).delete();
-      _showSnack("Lab removed");
+      final token = await _getToken();
+      final response = await http.delete(
+        Uri.parse('${ApiConfig.subjects}/$subjectId'),
+        headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
+      );
+
+      if (response.statusCode == 200) {
+        await _fetchSubjects();
+        _showSnack("Lab removed");
+      } else {
+        _showSnack("Failed to delete", isError: true);
+      }
     } catch (e) {
-      _showSnack("Failed to delete: $e", isError: true);
+      _showSnack("Network Error", isError: true);
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -202,18 +343,9 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                   separatorBuilder: (ctx, i) => const Divider(height: 1),
                   itemBuilder: (context, index) {
                     final item = schedule[index];
-                    final DateTime date = (item['date'] as Timestamp).toDate();
+                    final DateTime date = DateTime.parse(item['date'].toString());
                     final dateStr = "${date.day}/${date.month}/${date.year}";
-
-                    const days = [
-                      'Mon',
-                      'Tue',
-                      'Wed',
-                      'Thu',
-                      'Fri',
-                      'Sat',
-                      'Sun',
-                    ];
+                    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
                     final dayName = days[date.weekday - 1];
 
                     return Padding(
@@ -265,7 +397,7 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                                     ),
                                     const SizedBox(width: 4),
                                     Text(
-                                      "${item['startTime']} - ${item['endTime']}",
+                                      "${item['startTime'] ?? item['start_time']} - ${item['endTime'] ?? item['end_time']}",
                                       style: TextStyle(
                                         color: Colors.grey[600],
                                         fontSize: 12,
@@ -290,7 +422,7 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
     );
   }
 
-  void _showSessionSelector(List<QueryDocumentSnapshot> sessions) {
+  void _showSessionSelector() {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -308,19 +440,17 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 24),
               child: Text(
                 "Select Academic Session",
-                style: Theme.of(
-                  context,
-                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
               ),
             ),
             const SizedBox(height: 16),
             Flexible(
               child: ListView.builder(
                 shrinkWrap: true,
-                itemCount: sessions.length,
+                itemCount: _sessionsList.length,
                 itemBuilder: (context, index) {
-                  final data = sessions[index].data() as Map<String, dynamic>;
-                  final id = sessions[index].id;
+                  final data = _sessionsList[index];
+                  final id = data['id'].toString();
                   final isSelected = _viewingSessionId == id;
                   final isActive = data['status'] == 'Active';
 
@@ -328,46 +458,33 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                     onTap: () {
                       setState(() {
                         _viewingSessionId = id;
-                        _viewingSessionName = data['sessionName'];
+                        _viewingSessionName = data['session_name'] ?? data['sessionName'];
                       });
+                      _fetchSubjects();
                       Navigator.pop(context);
                     },
                     child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 16,
-                      ),
-                      color: isSelected
-                          ? Theme.of(context).primaryColor.withOpacity(0.05)
-                          : null,
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                      color: isSelected ? Theme.of(context).primaryColor.withOpacity(0.05) : null,
                       child: Row(
                         children: [
                           Icon(
-                            isActive
-                                ? Icons.verified_rounded
-                                : Icons.history_rounded,
+                            isActive ? Icons.verified_rounded : Icons.history_rounded,
                             color: isActive ? Colors.green : Colors.grey,
                             size: 20,
                           ),
                           const SizedBox(width: 12),
                           Expanded(
                             child: Text(
-                              data['sessionName'],
+                              data['session_name'] ?? data['sessionName'],
                               style: TextStyle(
-                                fontWeight: isSelected
-                                    ? FontWeight.bold
-                                    : FontWeight.normal,
-                                color: isSelected
-                                    ? Theme.of(context).primaryColor
-                                    : Colors.black87,
+                                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                color: isSelected ? Theme.of(context).primaryColor : Colors.black87,
                               ),
                             ),
                           ),
                           if (isSelected)
-                            Icon(
-                              Icons.check_circle_rounded,
-                              color: Theme.of(context).primaryColor,
-                            ),
+                            Icon(Icons.check_circle_rounded, color: Theme.of(context).primaryColor),
                         ],
                       ),
                     ),
@@ -467,23 +584,17 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                         duration: const Duration(milliseconds: 200),
                         padding: const EdgeInsets.symmetric(horizontal: 20),
                         decoration: BoxDecoration(
-                          color: isSelected
-                              ? Theme.of(context).primaryColor
-                              : Colors.white,
+                          color: isSelected ? Theme.of(context).primaryColor : Colors.white,
                           borderRadius: BorderRadius.circular(14),
                           border: Border.all(
-                            color: isSelected
-                                ? Colors.transparent
-                                : Colors.grey.withOpacity(0.3),
+                            color: isSelected ? Colors.transparent : Colors.grey.withOpacity(0.3),
                           ),
                         ),
                         child: Center(
                           child: Text(
                             "$years Years",
                             style: TextStyle(
-                              color: isSelected
-                                  ? Colors.white
-                                  : Colors.grey[800],
+                              color: isSelected ? Colors.white : Colors.grey[800],
                               fontWeight: FontWeight.w700,
                             ),
                           ),
@@ -498,9 +609,7 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                 width: double.infinity,
                 height: 56,
                 child: ElevatedButton(
-                  onPressed: _isLoading
-                      ? null
-                      : () => _addCourse(nameController.text, selectedYears),
+                  onPressed: _isLoading ? null : () => _addCourse(nameController.text, selectedYears),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Theme.of(context).primaryColor,
                     shape: RoundedRectangleBorder(
@@ -510,13 +619,13 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                   child: _isLoading
                       ? GeometricLoader(size: 24, isDarkMode: isDarkMode)
                       : const Text(
-                          "Create Course",
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14,
-                          ),
-                        ),
+                    "Create Course",
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -554,25 +663,13 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
       builder: (context) => StatefulBuilder(
         builder: (context, setSheetState) {
           Future<void> generateSchedule() async {
-            if (startDate == null ||
-                endDate == null ||
-                startTime == null ||
-                endTime == null ||
-                selectedWeekdays.isEmpty) {
-              CustomToast.show(
-                context,
-                "Please select dates, time & weekdays",
-                isError: true,
-              );
+            if (startDate == null || endDate == null || startTime == null || endTime == null || selectedWeekdays.isEmpty) {
+              CustomToast.show(context, "Please select dates, time & weekdays", isError: true);
               return;
             }
 
             if (endDate!.isBefore(startDate!)) {
-              CustomToast.show(
-                context,
-                "End date cannot be before start date",
-                isError: true,
-              );
+              CustomToast.show(context, "End date cannot be before start date", isError: true);
               return;
             }
 
@@ -582,15 +679,12 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
             List<Map<String, dynamic>> tempSchedule = [];
             DateTime current = startDate!;
 
-            while (current.isBefore(endDate!) ||
-                current.isAtSameMomentAs(endDate!)) {
+            while (current.isBefore(endDate!) || current.isAtSameMomentAs(endDate!)) {
               if (selectedWeekdays.contains(current.weekday)) {
                 tempSchedule.add({
-                  'date': Timestamp.fromDate(current),
-                  'startTime':
-                      "${startTime!.hour.toString().padLeft(2, '0')}:${startTime!.minute.toString().padLeft(2, '0')}",
-                  'endTime':
-                      "${endTime!.hour.toString().padLeft(2, '0')}:${endTime!.minute.toString().padLeft(2, '0')}",
+                  'date': current.toIso8601String(),
+                  'startTime': "${startTime!.hour.toString().padLeft(2, '0')}:${startTime!.minute.toString().padLeft(2, '0')}",
+                  'endTime': "${endTime!.hour.toString().padLeft(2, '0')}:${endTime!.minute.toString().padLeft(2, '0')}",
                 });
               }
               current = current.add(const Duration(days: 1));
@@ -602,10 +696,7 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
             });
 
             if (context.mounted) {
-              CustomToast.show(
-                context,
-                "Generated ${tempSchedule.length} sessions!",
-              );
+              CustomToast.show(context, "Generated ${tempSchedule.length} sessions!");
             }
           }
 
@@ -646,7 +737,6 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                   ),
                 ),
                 const SizedBox(height: 24),
-
                 Expanded(
                   child: SingleChildScrollView(
                     physics: const BouncingScrollPhysics(),
@@ -683,19 +773,15 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                             fillColor: const Color(0xFFF7F8FA),
                           ),
                         ),
-
                         const SizedBox(height: 32),
                         _buildSectionTitle("Schedule Generator"),
                         const SizedBox(height: 16),
-
                         Row(
                           children: [
                             Expanded(
                               child: _buildDatePickerBox(
                                 context,
-                                label: startDate == null
-                                    ? "Start Date"
-                                    : "${startDate!.day}/${startDate!.month}/${startDate!.year}",
+                                label: startDate == null ? "Start Date" : "${startDate!.day}/${startDate!.month}/${startDate!.year}",
                                 icon: Icons.calendar_today_rounded,
                                 isSelected: startDate != null,
                                 onTap: () async {
@@ -703,12 +789,9 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                                     context: context,
                                     initialDate: DateTime.now(),
                                     firstDate: DateTime.now(),
-                                    lastDate: DateTime.now().add(
-                                      const Duration(days: 365),
-                                    ),
+                                    lastDate: DateTime.now().add(const Duration(days: 365)),
                                   );
-                                  if (picked != null)
-                                    setSheetState(() => startDate = picked);
+                                  if (picked != null) setSheetState(() => startDate = picked);
                                 },
                               ),
                             ),
@@ -716,9 +799,7 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                             Expanded(
                               child: _buildDatePickerBox(
                                 context,
-                                label: endDate == null
-                                    ? "End Date"
-                                    : "${endDate!.day}/${endDate!.month}/${endDate!.year}",
+                                label: endDate == null ? "End Date" : "${endDate!.day}/${endDate!.month}/${endDate!.year}",
                                 icon: Icons.event_rounded,
                                 isSelected: endDate != null,
                                 onTap: () async {
@@ -726,12 +807,9 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                                     context: context,
                                     initialDate: startDate ?? DateTime.now(),
                                     firstDate: DateTime.now(),
-                                    lastDate: DateTime.now().add(
-                                      const Duration(days: 365),
-                                    ),
+                                    lastDate: DateTime.now().add(const Duration(days: 365)),
                                   );
-                                  if (picked != null)
-                                    setSheetState(() => endDate = picked);
+                                  if (picked != null) setSheetState(() => endDate = picked);
                                 },
                               ),
                             ),
@@ -743,21 +821,15 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                             Expanded(
                               child: _buildDatePickerBox(
                                 context,
-                                label: startTime == null
-                                    ? "Start Time"
-                                    : "${startTime!.hour}:${startTime!.minute.toString().padLeft(2, '0')}",
+                                label: startTime == null ? "Start Time" : "${startTime!.hour}:${startTime!.minute.toString().padLeft(2, '0')}",
                                 icon: Icons.schedule_rounded,
                                 isSelected: startTime != null,
                                 onTap: () async {
                                   final picked = await showTimePicker(
                                     context: context,
-                                    initialTime: const TimeOfDay(
-                                      hour: 9,
-                                      minute: 0,
-                                    ),
+                                    initialTime: const TimeOfDay(hour: 9, minute: 0),
                                   );
-                                  if (picked != null)
-                                    setSheetState(() => startTime = picked);
+                                  if (picked != null) setSheetState(() => startTime = picked);
                                 },
                               ),
                             ),
@@ -765,27 +837,21 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                             Expanded(
                               child: _buildDatePickerBox(
                                 context,
-                                label: endTime == null
-                                    ? "End Time"
-                                    : "${endTime!.hour}:${endTime!.minute.toString().padLeft(2, '0')}",
+                                label: endTime == null ? "End Time" : "${endTime!.hour}:${endTime!.minute.toString().padLeft(2, '0')}",
                                 icon: Icons.schedule_rounded,
                                 isSelected: endTime != null,
                                 onTap: () async {
                                   final picked = await showTimePicker(
                                     context: context,
-                                    initialTime:
-                                        startTime ??
-                                        const TimeOfDay(hour: 10, minute: 0),
+                                    initialTime: startTime ?? const TimeOfDay(hour: 10, minute: 0),
                                   );
-                                  if (picked != null)
-                                    setSheetState(() => endTime = picked);
+                                  if (picked != null) setSheetState(() => endTime = picked);
                                 },
                               ),
                             ),
                           ],
                         ),
                         const SizedBox(height: 16),
-
                         const Text(
                           "Repeats On",
                           style: TextStyle(
@@ -799,17 +865,13 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: List.generate(7, (index) {
                             final dayIndex = index + 1;
-                            final isSelected = selectedWeekdays.contains(
-                              dayIndex,
-                            );
+                            final isSelected = selectedWeekdays.contains(dayIndex);
                             final days = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 
                             return GestureDetector(
                               onTap: () {
                                 setSheetState(() {
-                                  isSelected
-                                      ? selectedWeekdays.remove(dayIndex)
-                                      : selectedWeekdays.add(dayIndex);
+                                  isSelected ? selectedWeekdays.remove(dayIndex) : selectedWeekdays.add(dayIndex);
                                 });
                               },
                               child: Container(
@@ -817,22 +879,16 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                                 height: 40,
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
-                                  color: isSelected
-                                      ? theme.primaryColor
-                                      : Colors.grey[100],
+                                  color: isSelected ? theme.primaryColor : Colors.grey[100],
                                   border: Border.all(
-                                    color: isSelected
-                                        ? Colors.transparent
-                                        : Colors.grey[300]!,
+                                    color: isSelected ? Colors.transparent : Colors.grey[300]!,
                                   ),
                                 ),
                                 child: Center(
                                   child: Text(
                                     days[index],
                                     style: TextStyle(
-                                      color: isSelected
-                                          ? Colors.white
-                                          : Colors.grey[600],
+                                      color: isSelected ? Colors.white : Colors.grey[600],
                                       fontWeight: FontWeight.bold,
                                     ),
                                   ),
@@ -841,52 +897,34 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                             );
                           }),
                         ),
-
                         const SizedBox(height: 24),
-
                         SizedBox(
                           width: double.infinity,
                           child: OutlinedButton.icon(
                             onPressed: isGenerating ? null : generateSchedule,
                             icon: isGenerating
                                 ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                : Icon(
-                                    Icons.auto_awesome_rounded,
-                                    size: 18,
-                                    color: theme.primaryColor,
-                                  ),
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                                : Icon(Icons.auto_awesome_rounded, size: 18, color: theme.primaryColor),
                             label: Text(
-                              isGenerating
-                                  ? "Generating..."
-                                  : "Generate Schedule",
+                              isGenerating ? "Generating..." : "Generate Schedule",
                               style: TextStyle(color: theme.primaryColor),
                             ),
                             style: OutlinedButton.styleFrom(
                               padding: const EdgeInsets.symmetric(vertical: 14),
-                              side: BorderSide(
-                                color: theme.primaryColor.withOpacity(0.5),
-                              ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
+                              side: BorderSide(color: theme.primaryColor.withOpacity(0.5)),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                             ),
                           ),
                         ),
-
                         if (generatedSchedule.isNotEmpty) ...[
                           const SizedBox(height: 12),
                           Center(
                             child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 6,
-                              ),
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                               decoration: BoxDecoration(
                                 color: Colors.green.withOpacity(0.1),
                                 borderRadius: BorderRadius.circular(20),
@@ -907,45 +945,40 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                     ),
                   ),
                 ),
-
                 const SizedBox(height: 16),
                 SizedBox(
                   width: double.infinity,
                   height: 56,
                   child: ElevatedButton(
-                    onPressed:
-                        (isSaving || isGenerating || generatedSchedule.isEmpty)
+                    onPressed: (isSaving || isGenerating || generatedSchedule.isEmpty)
                         ? null
                         : () async {
-                            setSheetState(() => isSaving = true);
-                            try {
-                              await _addSubject(
-                                nameController.text,
-                                codeController.text,
-                                generatedSchedule,
-                              );
-                            } catch (e) {
-                              if (mounted)
-                                setSheetState(() => isSaving = false);
-                            }
-                          },
+                      setSheetState(() => isSaving = true);
+                      try {
+                        await _addSubject(
+                          nameController.text,
+                          codeController.text,
+                          generatedSchedule,
+                        );
+                      } catch (e) {
+                        if (mounted) setSheetState(() => isSaving = false);
+                      }
+                    },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: theme.primaryColor,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                       elevation: 5,
                     ),
                     child: isSaving
                         ? GeometricLoader(size: 24, isDarkMode: isDarkMode)
                         : const Text(
-                            "Save Lab Configuration",
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 14,
-                            ),
-                          ),
+                      "Save Lab Configuration",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                      ),
+                    ),
                   ),
                 ),
               ],
@@ -957,26 +990,22 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
   }
 
   Widget _buildDatePickerBox(
-    BuildContext context, {
-    required String label,
-    required IconData icon,
-    required bool isSelected,
-    required VoidCallback onTap,
-  }) {
+      BuildContext context, {
+        required String label,
+        required IconData icon,
+        required bool isSelected,
+        required VoidCallback onTap,
+      }) {
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
         decoration: BoxDecoration(
-          color: isSelected
-              ? Theme.of(context).primaryColor.withOpacity(0.05)
-              : Colors.grey[50],
+          color: isSelected ? Theme.of(context).primaryColor.withOpacity(0.05) : Colors.grey[50],
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: isSelected
-                ? Theme.of(context).primaryColor
-                : Colors.grey[300]!,
+            color: isSelected ? Theme.of(context).primaryColor : Colors.grey[300]!,
           ),
         ),
         child: Row(
@@ -992,9 +1021,7 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.bold,
-                color: isSelected
-                    ? Theme.of(context).primaryColor
-                    : Colors.black87,
+                color: isSelected ? Theme.of(context).primaryColor : Colors.black87,
               ),
             ),
           ],
@@ -1055,11 +1082,11 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
   }
 
   Widget _buildSubjectTile(
-    Map<String, dynamic> data,
-    String id,
-    ThemeData theme,
-    bool isReadOnly,
-  ) {
+      Map<String, dynamic> data,
+      String id,
+      ThemeData theme,
+      bool isReadOnly,
+      ) {
     final name = data['name'] ?? 'Unknown';
     final code = data['code'] ?? '---';
     final schedule = data['schedule'] as List<dynamic>? ?? [];
@@ -1120,10 +1147,7 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                 Row(
                   children: [
                     Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 2,
-                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                       decoration: BoxDecoration(
                         color: Colors.grey[100],
                         borderRadius: BorderRadius.circular(6),
@@ -1143,7 +1167,6 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
               ],
             ),
           ),
-
           IconButton(
             onPressed: () => _showViewScheduleSheet(schedule, name),
             icon: Icon(
@@ -1153,7 +1176,6 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
             ),
             tooltip: "View Schedule",
           ),
-
           if (!isReadOnly)
             IconButton(
               onPressed: () => _deleteSubject(id),
@@ -1171,418 +1193,292 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_isFetchingInitial) {
+      return Scaffold(
+        backgroundColor: const Color(0xFFF7F8FA),
+        body: Center(
+          child: GeometricLoader(
+            size: 40,
+            isDarkMode: Theme.of(context).brightness == Brightness.dark,
+          ),
+        ),
+      );
+    }
+
     final theme = Theme.of(context);
     final bottomPadding = MediaQuery.of(context).padding.bottom;
     final isDarkMode = theme.brightness == Brightness.dark;
+    final bool isReadOnly = _viewingSessionId != _activeSessionId;
 
-    return StreamBuilder<QuerySnapshot>(
-      stream: _firestore
-          .collection('academic_sessions')
-          .orderBy('createdAt', descending: true)
-          .snapshots(),
-      builder: (context, sessionSnap) {
-        List<QueryDocumentSnapshot> sessions = [];
-        if (sessionSnap.hasData) {
-          sessions = sessionSnap.data!.docs;
-
-          // Determine Active Session
-          try {
-            final activeSession = sessions.firstWhere(
-              (s) => s['status'] == 'Active',
-            );
-            _activeSessionId = activeSession.id;
-
-            // Set initial view to active session if not set
-            if (_viewingSessionId == null) {
-              _viewingSessionId = activeSession.id;
-              _viewingSessionName = activeSession['sessionName'];
-            }
-          } catch (e) {
-            _activeSessionId = null; // No active session
-            if (_viewingSessionId == null && sessions.isNotEmpty) {
-              _viewingSessionId = sessions.first.id;
-              _viewingSessionName = sessions.first['sessionName'];
-            }
-          }
-        }
-
-        final bool isReadOnly = _viewingSessionId != _activeSessionId;
-
-        return Stack(
-          children: [
-            Scaffold(
-              backgroundColor: const Color(0xFFF7F8FA),
-              appBar: AppBar(
-                backgroundColor: Colors.transparent,
-                elevation: 0,
-                centerTitle: true,
-                leading: IconButton(
-                  icon: const Icon(
-                    Icons.arrow_back_ios_new_rounded,
-                    color: Colors.black,
-                    size: 20,
-                  ),
-                  onPressed: () => Navigator.pop(context),
-                ),
-                title: Text(
-                  "Academic Setup",
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 16,
-                  ),
+    return Stack(
+      children: [
+        Scaffold(
+          backgroundColor: const Color(0xFFF7F8FA),
+          appBar: AppBar(
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            centerTitle: true,
+            leading: IconButton(
+              icon: const Icon(
+                Icons.arrow_back_ios_new_rounded,
+                color: Colors.black,
+                size: 20,
+              ),
+              onPressed: () => Navigator.pop(context),
+            ),
+            title: Text(
+              "Academic Setup",
+              style: theme.textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.w800,
+                fontSize: 16,
+              ),
+            ),
+          ),
+          floatingActionButton: (_activeSessionId != null && !isReadOnly)
+              ? Padding(
+            padding: EdgeInsets.only(bottom: bottomPadding > 0 ? 0 : 20),
+            child: FloatingActionButton.extended(
+              onPressed: _showAddSubjectSheet,
+              backgroundColor: theme.primaryColor,
+              elevation: 2,
+              icon: const Icon(Icons.add_rounded, color: Colors.white),
+              label: const Text(
+                "Add Lab",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
                 ),
               ),
-
-              // Only Show FAB if we are in ACTIVE session mode and an active session exists
-              floatingActionButton: (_activeSessionId != null && !isReadOnly)
-                  ? Padding(
-                      padding: EdgeInsets.only(
-                        bottom: bottomPadding > 0 ? 0 : 20,
+            ),
+          )
+              : null,
+          body: SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 10),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: GestureDetector(
+                    onTap: () => _showSessionSelector(),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: theme.primaryColor.withOpacity(0.3)),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.02),
+                            blurRadius: 10,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
                       ),
-                      child: FloatingActionButton.extended(
-                        onPressed: _showAddSubjectSheet,
-                        backgroundColor: theme.primaryColor,
-                        elevation: 2,
-                        icon: const Icon(
-                          Icons.add_rounded,
-                          color: Colors.white,
-                        ),
-                        label: const Text(
-                          "Add Lab",
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 14,
-                          ),
-                        ),
-                      ),
-                    )
-                  : null,
-
-              body: SingleChildScrollView(
-                physics: const BouncingScrollPhysics(),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const SizedBox(height: 10),
-
-                    // --- Session Selector ---
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 24),
-                      child: GestureDetector(
-                        onTap: () => _showSessionSelector(sessions),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 12,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: theme.primaryColor.withOpacity(0.3),
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.02),
-                                blurRadius: 10,
-                                offset: const Offset(0, 4),
-                              ),
-                            ],
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    "Academic Session",
-                                    style: TextStyle(
-                                      fontSize: 10,
-                                      color: Colors.grey[600],
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                  Text(
-                                    _viewingSessionName,
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 14,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              Icon(
-                                Icons.keyboard_arrow_down_rounded,
-                                color: theme.primaryColor,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 24),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          _buildSectionTitle("Department Course"),
-                          // Only allow adding courses if in active mode (optional, but safe)
-                          IconButton(
-                            onPressed: _showAddCourseSheet,
-                            icon: Icon(
-                              Icons.add_circle,
-                              color: theme.primaryColor,
-                            ),
-                            tooltip: "New Course",
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                "Academic Session",
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  color: Colors.grey[600],
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              Text(
+                                _viewingSessionName,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ],
+                          ),
+                          Icon(
+                            Icons.keyboard_arrow_down_rounded,
+                            color: theme.primaryColor,
                           ),
                         ],
                       ),
                     ),
-
-                    SizedBox(
-                      height: 60,
-                      child: StreamBuilder<QuerySnapshot>(
-                        stream: _firestore
-                            .collection('courses')
-                            .orderBy('createdAt', descending: true)
-                            .snapshots(),
-                        builder: (context, snapshot) {
-                          if (!snapshot.hasData)
-                            return Center(
-                              child: GeometricLoader(
-                                size: 30,
-                                isDarkMode: isDarkMode,
-                              ),
-                            );
-                          final courses = snapshot.data!.docs;
-
-                          if (_selectedCourseId == null && courses.isNotEmpty) {
-                            WidgetsBinding.instance.addPostFrameCallback((_) {
-                              if (mounted)
-                                setState(() {
-                                  _selectedCourseId = courses.first.id;
-                                  _selectedCourseName = courses.first['name'];
-                                  _selectedCourseDuration =
-                                      courses.first['durationYears'];
-                                  _selectedSemester = 1;
-                                });
-                            });
-                          }
-
-                          return ListView.separated(
-                            scrollDirection: Axis.horizontal,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 24,
-                              vertical: 4,
-                            ),
-                            clipBehavior: Clip.none,
-                            itemCount: courses.length,
-                            separatorBuilder: (_, __) =>
-                                const SizedBox(width: 12),
-                            itemBuilder: (context, index) {
-                              final doc = courses[index];
-                              final isSelected = _selectedCourseId == doc.id;
-                              return GestureDetector(
-                                onTap: () => setState(() {
-                                  _selectedCourseId = doc.id;
-                                  _selectedCourseName = doc['name'];
-                                  _selectedCourseDuration =
-                                      doc['durationYears'];
-                                  _selectedSemester = 1;
-                                }),
-                                child: AnimatedContainer(
-                                  duration: const Duration(milliseconds: 200),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 24,
-                                    vertical: 12,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: isSelected
-                                        ? theme.primaryColor
-                                        : Colors.white,
-                                    borderRadius: BorderRadius.circular(25),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: isSelected
-                                            ? theme.primaryColor.withOpacity(
-                                                0.3,
-                                              )
-                                            : Colors.grey.withOpacity(0.05),
-                                        blurRadius: 8,
-                                        offset: const Offset(0, 4),
-                                      ),
-                                    ],
-                                  ),
-                                  child: Center(
-                                    child: Text(
-                                      doc['name'],
-                                      style: TextStyle(
-                                        color: isSelected
-                                            ? Colors.white
-                                            : Colors.grey[700],
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              );
-                            },
-                          );
-                        },
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      _buildSectionTitle("Department Course"),
+                      IconButton(
+                        onPressed: _showAddCourseSheet,
+                        icon: Icon(Icons.add_circle, color: theme.primaryColor),
+                        tooltip: "New Course",
                       ),
+                    ],
+                  ),
+                ),
+                SizedBox(
+                  height: 60,
+                  child: _coursesList.isEmpty
+                      ? Center(
+                    child: Text(
+                      "No courses setup yet.",
+                      style: TextStyle(color: Colors.grey[500]),
                     ),
-
-                    const SizedBox(height: 32),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 24),
-                      child: _buildSectionTitle("Semester"),
-                    ),
-                    const SizedBox(height: 16),
-                    SizedBox(
-                      height: 60,
-                      child: ListView.separated(
-                        scrollDirection: Axis.horizontal,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 24,
-                          vertical: 4,
+                  )
+                      : ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
+                    clipBehavior: Clip.none,
+                    itemCount: _coursesList.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 12),
+                    itemBuilder: (context, index) {
+                      final doc = _coursesList[index];
+                      final isSelected = _selectedCourseId == doc['id'].toString();
+                      return GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            _selectedCourseId = doc['id'].toString();
+                            _selectedCourseName = doc['name'];
+                            _selectedCourseDuration = int.tryParse(doc['duration_years'].toString()) ?? 4;
+                            _selectedSemester = 1;
+                          });
+                          _fetchSubjects();
+                        },
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                          decoration: BoxDecoration(
+                            color: isSelected ? theme.primaryColor : Colors.white,
+                            borderRadius: BorderRadius.circular(25),
+                            boxShadow: [
+                              BoxShadow(
+                                color: isSelected ? theme.primaryColor.withOpacity(0.3) : Colors.grey.withOpacity(0.05),
+                                blurRadius: 8,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: Center(
+                            child: Text(
+                              doc['name'],
+                              style: TextStyle(
+                                color: isSelected ? Colors.white : Colors.grey[700],
+                                fontWeight: FontWeight.w700,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
                         ),
-                        clipBehavior: Clip.none,
-                        itemCount: _selectedCourseDuration * 2,
-                        separatorBuilder: (_, __) => const SizedBox(width: 12),
-                        itemBuilder: (context, index) {
-                          final sem = index + 1;
-                          final isSelected = _selectedSemester == sem;
-                          return GestureDetector(
-                            onTap: () =>
-                                setState(() => _selectedSemester = sem),
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 200),
-                              width: 50,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: isSelected
-                                    ? theme.colorScheme.secondary
-                                    : Colors.white,
-                                border: Border.all(
-                                  color: isSelected
-                                      ? Colors.transparent
-                                      : Colors.grey.withOpacity(0.1),
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: isSelected
-                                        ? theme.colorScheme.secondary
-                                              .withOpacity(0.4)
-                                        : Colors.grey.withOpacity(0.05),
-                                    blurRadius: 8,
-                                    offset: const Offset(0, 4),
-                                  ),
-                                ],
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 32),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: _buildSectionTitle("Semester"),
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  height: 60,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
+                    clipBehavior: Clip.none,
+                    itemCount: _selectedCourseDuration * 2,
+                    separatorBuilder: (_, __) => const SizedBox(width: 12),
+                    itemBuilder: (context, index) {
+                      final sem = index + 1;
+                      final isSelected = _selectedSemester == sem;
+                      return GestureDetector(
+                        onTap: () {
+                          setState(() => _selectedSemester = sem);
+                          _fetchSubjects();
+                        },
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          width: 50,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: isSelected ? theme.colorScheme.secondary : Colors.white,
+                            border: Border.all(
+                              color: isSelected ? Colors.transparent : Colors.grey.withOpacity(0.1),
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: isSelected ? theme.colorScheme.secondary.withOpacity(0.4) : Colors.grey.withOpacity(0.05),
+                                blurRadius: 8,
+                                offset: const Offset(0, 4),
                               ),
-                              child: Center(
-                                child: Text(
-                                  "$sem",
-                                  style: TextStyle(
-                                    color: isSelected
-                                        ? Colors.white
-                                        : Colors.grey[700],
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 16,
-                                  ),
-                                ),
+                            ],
+                          ),
+                          child: Center(
+                            child: Text(
+                              "$sem",
+                              style: TextStyle(
+                                color: isSelected ? Colors.white : Colors.grey[700],
+                                fontWeight: FontWeight.w800,
+                                fontSize: 16,
                               ),
                             ),
-                          );
-                        },
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 32),
+                if (_selectedCourseId != null && _viewingSessionId != null)
+                  _isFetchingSubjects
+                      ? Padding(
+                    padding: const EdgeInsets.only(top: 50),
+                    child: Center(
+                      child: GeometricLoader(size: 30, isDarkMode: isDarkMode),
+                    ),
+                  )
+                      : _subjectsList.isEmpty
+                      ? (isReadOnly
+                      ? const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(40),
+                      child: Text(
+                        "No data in this past session.",
+                        style: TextStyle(color: Colors.grey),
                       ),
                     ),
-
-                    const SizedBox(height: 32),
-                    // --- SUBJECT LIST (FILTERED BY SESSION) ---
-                    if (_selectedCourseId != null && _viewingSessionId != null)
-                      StreamBuilder<QuerySnapshot>(
-                        stream: _firestore
-                            .collection('subjects')
-                            .where('courseId', isEqualTo: _selectedCourseId)
-                            .where('semester', isEqualTo: _selectedSemester)
-                            .where(
-                              'sessionId',
-                              isEqualTo: _viewingSessionId,
-                            ) // KEY FILTER
-                            .orderBy('createdAt')
-                            .snapshots(),
-                        builder: (context, snapshot) {
-                          if (!snapshot.hasData)
-                            return Padding(
-                              padding: const EdgeInsets.only(top: 50),
-                              child: Center(
-                                child: GeometricLoader(
-                                  size: 30,
-                                  isDarkMode: isDarkMode,
-                                ),
-                              ),
-                            );
-                          final subjects = snapshot.data!.docs;
-
-                          if (subjects.isEmpty) {
-                            if (isReadOnly) {
-                              return const Center(
-                                child: Padding(
-                                  padding: EdgeInsets.all(40),
-                                  child: Text(
-                                    "No data in this past session.",
-                                    style: TextStyle(color: Colors.grey),
-                                  ),
-                                ),
-                              );
-                            }
-                            return _buildEmptyState();
-                          }
-
-                          return ListView.builder(
-                            shrinkWrap: true,
-                            padding: EdgeInsets.fromLTRB(
-                              24,
-                              0,
-                              24,
-                              bottomPadding + 80,
-                            ),
-                            physics: const NeverScrollableScrollPhysics(),
-                            itemCount: subjects.length,
-                            itemBuilder: (context, index) {
-                              final data =
-                                  subjects[index].data()
-                                      as Map<String, dynamic>;
-                              final id = subjects[index].id;
-                              return _buildSubjectTile(
-                                data,
-                                id,
-                                theme,
-                                isReadOnly,
-                              );
-                            },
-                          );
-                        },
-                      ),
-                  ],
-                ),
-              ),
+                  )
+                      : _buildEmptyState())
+                      : ListView.builder(
+                    shrinkWrap: true,
+                    padding: EdgeInsets.fromLTRB(24, 0, 24, bottomPadding + 80),
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: _subjectsList.length,
+                    itemBuilder: (context, index) {
+                      final data = _subjectsList[index];
+                      final id = data['id'].toString();
+                      return _buildSubjectTile(data, id, theme, isReadOnly);
+                    },
+                  ),
+              ],
             ),
-            if (_isLoading)
-              Container(
-                color: Colors.black.withOpacity(0.3),
-                child: Center(
-                  child: GeometricLoader(size: 60, isDarkMode: isDarkMode),
-                ),
-              ),
-          ],
-        );
-      },
+          ),
+        ),
+        if (_isLoading)
+          Container(
+            color: Colors.black.withOpacity(0.3),
+            child: Center(
+              child: GeometricLoader(size: 60, isDarkMode: isDarkMode),
+            ),
+          ),
+      ],
     );
   }
 }

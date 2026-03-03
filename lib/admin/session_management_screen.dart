@@ -1,6 +1,10 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/api_config.dart';
 import '../widgets/geometric_loader.dart';
 import '../utils/custom_toast.dart';
 
@@ -13,8 +17,10 @@ class SessionManagementScreen extends StatefulWidget {
 }
 
 class _SessionManagementScreenState extends State<SessionManagementScreen> {
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   bool _isLoading = false;
+  bool _isFetchingData = true;
+  List<dynamic> _sessionsList = [];
+  List<dynamic> _coursesList = [];
 
   final TextEditingController _nameController = TextEditingController();
   DateTime? _startDate;
@@ -24,6 +30,82 @@ class _SessionManagementScreenState extends State<SessionManagementScreen> {
   String _selectedCourseName = 'All Courses (Global)';
   String _selectedSemester = 'ALL';
   int _currentCourseDuration = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchInitialData();
+  }
+
+  Future<void> _fetchInitialData() async {
+    setState(() => _isFetchingData = true);
+    await Future.wait([_fetchSessions(), _fetchCourses()]);
+    if (mounted) {
+      setState(() => _isFetchingData = false);
+    }
+  }
+
+  Future<String?> _getToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('auth_token');
+  }
+
+  Future<void> _fetchSessions() async {
+    try {
+      final token = await _getToken();
+      if (token == null) return;
+
+      final response = await http
+          .get(
+            Uri.parse('${ApiConfig.baseUrl}/sessions'),
+            headers: {
+              'Authorization': 'Bearer $token',
+              'Accept': 'application/json',
+            },
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (mounted) {
+          setState(() {
+            _sessionsList = data['data'];
+          });
+        }
+      }
+    } catch (e) {
+      if (mounted)
+        CustomToast.show(context, "Failed to load sessions", isError: true);
+    }
+  }
+
+  Future<void> _fetchCourses() async {
+    try {
+      final token = await _getToken();
+      if (token == null) return;
+
+      final response = await http
+          .get(
+            Uri.parse('${ApiConfig.baseUrl}/courses'),
+            headers: {
+              'Authorization': 'Bearer $token',
+              'Accept': 'application/json',
+            },
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (mounted) {
+          setState(() {
+            _coursesList = data['data'] ?? data;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint(e.toString());
+    }
+  }
 
   Future<void> _selectDate(BuildContext context, bool isStart) async {
     final DateTime? picked = await showDatePicker(
@@ -77,36 +159,7 @@ class _SessionManagementScreenState extends State<SessionManagementScreen> {
     setState(() => _isLoading = true);
 
     try {
-      final duplicateCheck = await _firestore
-          .collection('academic_sessions')
-          .where('sessionName', isEqualTo: sessionName)
-          .limit(1)
-          .get();
-
-      if (duplicateCheck.docs.isNotEmpty) {
-        if (mounted) {
-          CustomToast.show(
-            context,
-            "Session '$sessionName' already exists!",
-            isError: true,
-          );
-        }
-        return;
-      }
-
-      final activeSessions = await _firestore
-          .collection('academic_sessions')
-          .where('status', isEqualTo: 'Active')
-          .get();
-
-      WriteBatch batch = _firestore.batch();
-      for (var doc in activeSessions.docs) {
-        batch.update(doc.reference, {'status': 'Inactive'});
-      }
-
-      DocumentReference newSession = _firestore
-          .collection('academic_sessions')
-          .doc();
+      final token = await _getToken();
 
       String targetDescription;
       if (_selectedCourseId == 'ALL') {
@@ -117,41 +170,63 @@ class _SessionManagementScreenState extends State<SessionManagementScreen> {
             : "$_selectedCourseName • Semester $_selectedSemester";
       }
 
-      String academicYear = "";
-      if (_startDate != null) {
-        int startYear = _startDate!.year;
-        int nextYearShort = (startYear + 1) % 100;
-        academicYear = "$startYear-$nextYearShort";
-      }
+      int startYear = _startDate!.year;
+      int nextYearShort = (startYear + 1) % 100;
+      String academicYear = "$startYear-$nextYearShort";
 
-      batch.set(newSession, {
-        'sessionName': sessionName,
-        'academicYear': academicYear,
-        'startDate': Timestamp.fromDate(_startDate!),
-        'endDate': Timestamp.fromDate(_endDate!),
-        'courseId': _selectedCourseId,
-        'courseName': _selectedCourseName,
-        'targetSemester': _selectedSemester,
+      final Map<String, dynamic> requestBody = {
+        'session_name': sessionName,
+        'academic_year': academicYear,
+        'start_date': DateFormat('yyyy-MM-dd').format(_startDate!),
+        'end_date': DateFormat('yyyy-MM-dd').format(_endDate!),
+        'course_id': _selectedCourseId,
+        'course_name': _selectedCourseName,
+        'target_semester': _selectedSemester,
         'description': targetDescription,
-        'status': 'Active',
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+      };
 
-      await batch.commit();
+      final response = await http
+          .post(
+            Uri.parse('${ApiConfig.baseUrl}/sessions'),
+            headers: {
+              'Authorization': 'Bearer $token',
+              'Accept': 'application/json',
+              'Content-Type': 'application/json',
+            },
+            body: json.encode(requestBody),
+          )
+          .timeout(const Duration(seconds: 15));
 
-      _nameController.clear();
-      setState(() {
-        _startDate = null;
-        _endDate = null;
-        _selectedCourseId = 'ALL';
-        _selectedCourseName = 'All Courses (Global)';
-        _selectedSemester = 'ALL';
-      });
+      if (response.statusCode == 201) {
+        _nameController.clear();
+        setState(() {
+          _startDate = null;
+          _endDate = null;
+          _selectedCourseId = 'ALL';
+          _selectedCourseName = 'All Courses (Global)';
+          _selectedSemester = 'ALL';
+        });
 
-      if (mounted) Navigator.pop(context);
-      CustomToast.show(context, "Session Activated Successfully!");
+        await _fetchSessions();
+
+        if (mounted) {
+          Navigator.pop(context);
+          CustomToast.show(context, "Session Activated Successfully!");
+        }
+      } else {
+        final errorData = json.decode(response.body);
+        if (mounted) {
+          CustomToast.show(
+            context,
+            errorData['message'] ?? "Failed to create session",
+            isError: true,
+          );
+        }
+      }
+    } on SocketException {
+      if (mounted) CustomToast.show(context, "Network Error", isError: true);
     } catch (e) {
-      CustomToast.show(context, "Error: $e", isError: true);
+      if (mounted) CustomToast.show(context, "Error: $e", isError: true);
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -181,12 +256,25 @@ class _SessionManagementScreenState extends State<SessionManagementScreen> {
 
     if (confirm == true) {
       try {
-        await _firestore
-            .collection('academic_sessions')
-            .doc(sessionId)
-            .delete();
-        if (mounted) {
-          CustomToast.show(context, "Session Deleted Successfully");
+        final token = await _getToken();
+        final response = await http
+            .delete(
+              Uri.parse('${ApiConfig.baseUrl}/sessions/$sessionId'),
+              headers: {
+                'Authorization': 'Bearer $token',
+                'Accept': 'application/json',
+              },
+            )
+            .timeout(const Duration(seconds: 10));
+
+        if (response.statusCode == 200) {
+          await _fetchSessions();
+          if (mounted) {
+            CustomToast.show(context, "Session Deleted Successfully");
+          }
+        } else {
+          if (mounted)
+            CustomToast.show(context, "Failed to delete", isError: true);
         }
       } catch (e) {
         if (mounted) {
@@ -223,59 +311,54 @@ class _SessionManagementScreenState extends State<SessionManagementScreen> {
               ),
             ),
             const SizedBox(height: 16),
-            StreamBuilder<QuerySnapshot>(
-              stream: _firestore.collection('courses').snapshots(),
-              builder: (context, snapshot) {
-                if (!snapshot.hasData) {
-                  return const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(20),
-                      child: CircularProgressIndicator(),
-                    ),
-                  );
-                }
-
-                final courses = snapshot.data!.docs;
-
-                return Flexible(
-                  child: ListView(
-                    shrinkWrap: true,
-                    children: [
-                      _buildSelectionItem(
-                        title: "All Courses (Global)",
-                        isSelected: _selectedCourseId == 'ALL',
-                        onTap: () {
-                          setSheetState(() {
-                            _selectedCourseId = 'ALL';
-                            _selectedCourseName = 'All Courses (Global)';
-                            _currentCourseDuration = 0;
-                            _selectedSemester = 'ALL';
-                          });
-                          Navigator.pop(context);
-                        },
-                      ),
-                      const Divider(height: 1),
-                      ...courses.map((doc) {
-                        final data = doc.data() as Map<String, dynamic>;
-                        return _buildSelectionItem(
-                          title: data['name'],
-                          subtitle: "${data['durationYears']} Years Duration",
-                          isSelected: _selectedCourseId == doc.id,
-                          onTap: () {
-                            setSheetState(() {
-                              _selectedCourseId = doc.id;
-                              _selectedCourseName = data['name'];
-                              _currentCourseDuration = data['durationYears'];
-                              _selectedSemester = 'ALL';
-                            });
-                            Navigator.pop(context);
-                          },
-                        );
-                      }).toList(),
-                    ],
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  _buildSelectionItem(
+                    title: "All Courses (Global)",
+                    isSelected: _selectedCourseId == 'ALL',
+                    onTap: () {
+                      setSheetState(() {
+                        _selectedCourseId = 'ALL';
+                        _selectedCourseName = 'All Courses (Global)';
+                        _currentCourseDuration = 0;
+                        _selectedSemester = 'ALL';
+                      });
+                      Navigator.pop(context);
+                    },
                   ),
-                );
-              },
+                  const Divider(height: 1),
+                  if (_coursesList.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.all(20.0),
+                      child: Center(child: Text("No courses found")),
+                    ),
+                  ..._coursesList.map((data) {
+                    return _buildSelectionItem(
+                      title: data['name'],
+                      subtitle:
+                          "${data['duration_years'] ?? data['durationYears']} Years Duration",
+                      isSelected: _selectedCourseId == data['id'].toString(),
+                      onTap: () {
+                        setSheetState(() {
+                          _selectedCourseId = data['id'].toString();
+                          _selectedCourseName = data['name'];
+                          _currentCourseDuration =
+                              int.tryParse(
+                                data['duration_years']?.toString() ??
+                                    data['durationYears']?.toString() ??
+                                    '0',
+                              ) ??
+                              0;
+                          _selectedSemester = 'ALL';
+                        });
+                        Navigator.pop(context);
+                      },
+                    );
+                  }),
+                ],
+              ),
             ),
           ],
         ),
@@ -449,7 +532,6 @@ class _SessionManagementScreenState extends State<SessionManagementScreen> {
                 style: TextStyle(color: Colors.grey[600], fontSize: 12),
               ),
               const SizedBox(height: 32),
-
               TextField(
                 controller: _nameController,
                 style: const TextStyle(fontWeight: FontWeight.w600),
@@ -465,7 +547,6 @@ class _SessionManagementScreenState extends State<SessionManagementScreen> {
                 ),
               ),
               const SizedBox(height: 16),
-
               Row(
                 children: [
                   Expanded(
@@ -557,9 +638,7 @@ class _SessionManagementScreenState extends State<SessionManagementScreen> {
                   ),
                 ],
               ),
-
               const SizedBox(height: 16),
-
               const Text(
                 "Applicability",
                 style: TextStyle(
@@ -568,7 +647,6 @@ class _SessionManagementScreenState extends State<SessionManagementScreen> {
                 ),
               ),
               const SizedBox(height: 8),
-
               GestureDetector(
                 onTap: () => _showCourseSelector(setSheetState),
                 child: Container(
@@ -608,9 +686,7 @@ class _SessionManagementScreenState extends State<SessionManagementScreen> {
                   ),
                 ),
               ),
-
               const SizedBox(height: 12),
-
               Opacity(
                 opacity: _selectedCourseId == 'ALL' ? 0.5 : 1.0,
                 child: GestureDetector(
@@ -658,9 +734,7 @@ class _SessionManagementScreenState extends State<SessionManagementScreen> {
                   ),
                 ),
               ),
-
               const SizedBox(height: 32),
-
               SizedBox(
                 width: double.infinity,
                 height: 56,
@@ -743,191 +817,188 @@ class _SessionManagementScreenState extends State<SessionManagementScreen> {
           ),
         ),
       ),
-      body: StreamBuilder<QuerySnapshot>(
-        stream: _firestore
-            .collection('academic_sessions')
-            .orderBy('createdAt', descending: true)
-            .snapshots(),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) {
-            return Center(child: GeometricLoader(size: 40, isDarkMode: false));
-          }
+      body: _isFetchingData
+          ? Center(child: GeometricLoader(size: 40, isDarkMode: false))
+          : _sessionsList.isEmpty
+          ? _buildEmptyState()
+          : ListView.builder(
+              padding: EdgeInsets.fromLTRB(24, 20, 24, bottomPadding + 100),
+              physics: const BouncingScrollPhysics(),
+              itemCount: _sessionsList.length,
+              itemBuilder: (context, index) {
+                final data = _sessionsList[index];
+                final bool isActive = data['status'] == 'Active';
+                final DateTime start = DateTime.parse(
+                  data['start_date'] ?? data['startDate'],
+                );
+                final DateTime end = DateTime.parse(
+                  data['end_date'] ?? data['endDate'],
+                );
 
-          final sessions = snapshot.data!.docs;
-
-          if (sessions.isEmpty) return _buildEmptyState();
-
-          return ListView.builder(
-            padding: EdgeInsets.fromLTRB(24, 20, 24, bottomPadding + 100),
-            physics: const BouncingScrollPhysics(),
-            itemCount: sessions.length,
-            itemBuilder: (context, index) {
-              final data = sessions[index];
-              final bool isActive = data['status'] == 'Active';
-
-              return Container(
-                margin: const EdgeInsets.only(bottom: 16),
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(24),
-                  border: isActive
-                      ? Border.all(color: theme.primaryColor, width: 2)
-                      : Border.all(color: Colors.transparent),
-                  boxShadow: [
-                    BoxShadow(
-                      color: isActive
-                          ? theme.primaryColor.withOpacity(0.15)
-                          : Colors.black.withOpacity(0.03),
-                      blurRadius: 15,
-                      offset: const Offset(0, 8),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: isActive
-                                ? theme.primaryColor.withOpacity(0.1)
-                                : Colors.grey[100],
-                            shape: BoxShape.circle,
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 16),
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(24),
+                    border: isActive
+                        ? Border.all(color: theme.primaryColor, width: 2)
+                        : Border.all(color: Colors.transparent),
+                    boxShadow: [
+                      BoxShadow(
+                        color: isActive
+                            ? theme.primaryColor.withOpacity(0.15)
+                            : Colors.black.withOpacity(0.03),
+                        blurRadius: 15,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: isActive
+                                  ? theme.primaryColor.withOpacity(0.1)
+                                  : Colors.grey[100],
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              isActive
+                                  ? Icons.verified_rounded
+                                  : Icons.history_rounded,
+                              color: isActive
+                                  ? theme.primaryColor
+                                  : Colors.grey[400],
+                              size: 24,
+                            ),
                           ),
-                          child: Icon(
-                            isActive
-                                ? Icons.verified_rounded
-                                : Icons.history_rounded,
-                            color: isActive
-                                ? theme.primaryColor
-                                : Colors.grey[400],
-                            size: 24,
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  data['session_name'] ??
+                                      data['sessionName'] ??
+                                      '',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 16,
+                                    color: Color(0xFF1A1A1A),
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.date_range_rounded,
+                                      size: 14,
+                                      color: Colors.grey[500],
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      "${DateFormat('dd MMM yyyy').format(start)} - ${DateFormat('dd MMM yyyy').format(end)}",
+                                      style: TextStyle(
+                                        color: Colors.grey[600],
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
                             children: [
-                              Text(
-                                data['sessionName'],
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: 16,
-                                  color: Color(0xFF1A1A1A),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 6,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: isActive
+                                      ? Colors.green.withOpacity(0.1)
+                                      : Colors.grey[100],
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  isActive ? "ACTIVE" : "ENDED",
+                                  style: TextStyle(
+                                    color: isActive
+                                        ? Colors.green
+                                        : Colors.grey[500],
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 10,
+                                  ),
                                 ),
                               ),
-                              const SizedBox(height: 4),
-                              Row(
-                                children: [
-                                  Icon(
-                                    Icons.date_range_rounded,
-                                    size: 14,
-                                    color: Colors.grey[500],
+                              const SizedBox(height: 8),
+                              InkWell(
+                                onTap: () =>
+                                    _deleteSession(data['id'].toString()),
+                                borderRadius: BorderRadius.circular(8),
+                                child: Container(
+                                  padding: const EdgeInsets.all(6),
+                                  decoration: BoxDecoration(
+                                    color: Colors.red.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(8),
                                   ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    "${DateFormat('dd MMM yyyy').format(data['startDate'].toDate())} - ${DateFormat('dd MMM yyyy').format(data['endDate'].toDate())}",
-                                    style: TextStyle(
-                                      color: Colors.grey[600],
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w500,
-                                    ),
+                                  child: const Icon(
+                                    Icons.delete_outline_rounded,
+                                    size: 18,
+                                    color: Colors.red,
                                   ),
-                                ],
+                                ),
                               ),
                             ],
                           ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        width: double.infinity,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF7F8FA),
+                          borderRadius: BorderRadius.circular(12),
                         ),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
+                        child: Row(
                           children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 6,
-                              ),
-                              decoration: BoxDecoration(
-                                color: isActive
-                                    ? Colors.green.withOpacity(0.1)
-                                    : Colors.grey[100],
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(
-                                isActive ? "ACTIVE" : "ENDED",
-                                style: TextStyle(
-                                  color: isActive
-                                      ? Colors.green
-                                      : Colors.grey[500],
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: 10,
-                                ),
-                              ),
+                            Icon(
+                              Icons.hub_outlined,
+                              size: 16,
+                              color: Colors.grey[600],
                             ),
-                            const SizedBox(height: 8),
-                            InkWell(
-                              onTap: () => _deleteSession(data.id),
-                              borderRadius: BorderRadius.circular(8),
-                              child: Container(
-                                padding: const EdgeInsets.all(6),
-                                decoration: BoxDecoration(
-                                  color: Colors.red.withOpacity(0.1),
-                                  borderRadius: BorderRadius.circular(8),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                data['description'] ??
+                                    (data['course_id'] == 'ALL'
+                                        ? "Global Session"
+                                        : "Specific Course Session"),
+                                style: TextStyle(
+                                  color: Colors.grey[700],
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
                                 ),
-                                child: const Icon(
-                                  Icons.delete_outline_rounded,
-                                  size: 18,
-                                  color: Colors.red,
-                                ),
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
                           ],
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      width: double.infinity,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF7F8FA),
-                        borderRadius: BorderRadius.circular(12),
                       ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.hub_outlined,
-                            size: 16,
-                            color: Colors.grey[600],
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              data['description'] ??
-                                  (data['courseId'] == 'ALL'
-                                      ? "Global Session"
-                                      : "Specific Course Session"),
-                              style: TextStyle(
-                                color: Colors.grey[700],
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            },
-          );
-        },
-      ),
+                    ],
+                  ),
+                );
+              },
+            ),
     );
   }
 

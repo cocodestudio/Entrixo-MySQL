@@ -1,11 +1,13 @@
+import 'dart:convert';
 import 'dart:ui';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:intl/intl.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/api_config.dart';
 import '../widgets/geometric_loader.dart';
 
 class AttendanceData {
@@ -28,215 +30,100 @@ class AttendanceData {
 
 final sessionListProvider =
     FutureProvider.autoDispose<List<Map<String, String>>>((ref) async {
-      final firestore = FirebaseFirestore.instance;
-      final snapshot = await firestore
-          .collection('academic_sessions')
-          .orderBy('startDate', descending: true)
-          .get();
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('auth_token');
+      if (token == null) throw Exception("User not logged in");
 
-      return snapshot.docs.map((doc) {
-        final data = doc.data();
-        final String name = data['sessionName'] as String;
-        final String year = data['academicYear'] ?? '';
-        final String displayName = year.isNotEmpty ? "$name ($year)" : name;
+      final response = await http.get(
+        Uri.parse('${ApiConfig.baseUrl}/student/sessions'),
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
 
-        return {'id': doc.id, 'name': displayName};
-      }).toList();
+      if (response.statusCode == 200) {
+        final List data = jsonDecode(response.body)['data'] ?? [];
+        return data
+            .map(
+              (e) => {
+                'id': e['id']?.toString() ?? '',
+                'name': e['name']?.toString() ?? 'Unknown Session',
+              },
+            )
+            .toList();
+      } else {
+        throw Exception("Failed to load sessions");
+      }
     });
 
 final selectedSessionProvider = StateProvider.autoDispose<String?>(
   (ref) => null,
 );
 
-final _attendanceTriggerProvider = StreamProvider.autoDispose((ref) {
-  final user = FirebaseAuth.instance.currentUser;
-  if (user == null) return const Stream.empty();
-  return FirebaseFirestore.instance
-      .collection('attendance')
-      .where('uid', isEqualTo: user.uid)
-      .snapshots();
-});
-
 final attendanceProvider = FutureProvider.autoDispose
     .family<AttendanceData, String?>((ref, sessionId) async {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) throw Exception("User not logged in");
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('auth_token');
+      if (token == null) throw Exception("User not logged in");
 
-      ref.watch(_attendanceTriggerProvider);
-
-      final firestore = FirebaseFirestore.instance;
-      final userDoc = await firestore.collection('users').doc(user.uid).get();
-      final userData = userDoc.data();
-      if (userData == null) throw Exception("User data not found");
-
-      final String? courseId = userData['courseId'];
-
-      String targetSessionId = sessionId ?? '';
-      String targetSessionName = '';
-
-      if (targetSessionId.isEmpty) {
-        final activeSessionQuery = await firestore
-            .collection('academic_sessions')
-            .where('status', isEqualTo: 'Active')
-            .limit(1)
-            .get();
-
-        if (activeSessionQuery.docs.isNotEmpty) {
-          final doc = activeSessionQuery.docs.first;
-          final data = doc.data();
-          targetSessionId = doc.id;
-          final String sName = data['sessionName'] ?? '';
-          final String aYear = data['academicYear'] ?? '';
-          targetSessionName = aYear.isNotEmpty ? "$sName ($aYear)" : sName;
-        }
-      } else {
-        final sessionDoc = await firestore
-            .collection('academic_sessions')
-            .doc(targetSessionId)
-            .get();
-        if (sessionDoc.exists) {
-          final data = sessionDoc.data();
-          if (data != null) {
-            final String sName = data['sessionName'] ?? '';
-            final String aYear = data['academicYear'] ?? '';
-            targetSessionName = aYear.isNotEmpty ? "$sName ($aYear)" : sName;
-          }
-        }
+      String url = '${ApiConfig.baseUrl}/student/attendance';
+      if (sessionId != null && sessionId.isNotEmpty) {
+        url += '?session_id=$sessionId';
       }
 
-      if (targetSessionId.isEmpty) {
-        return AttendanceData(
-          subjects: [],
-          overallPercentage: 0,
-          totalClasses: 0,
-          totalPresent: 0,
-          activeSessionId: '',
-          activeSessionName: 'No Active Session',
-        );
-      }
+      final response = await http.get(
+        Uri.parse(url),
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
 
-      if (sessionId == null) {
-        Future.microtask(() {
-          ref.read(selectedSessionProvider.notifier).state = targetSessionId;
-        });
-      }
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body)['data'] ?? {};
 
-      final subjectsQuery = await firestore
-          .collection('subjects')
-          .where('courseId', isEqualTo: courseId)
-          .where('sessionId', isEqualTo: targetSessionId)
-          .get();
-
-      List<Map<String, dynamic>> finalSubjects = [];
-      int globalTotal = 0;
-      int globalPresent = 0;
-
-      for (var doc in subjectsQuery.docs) {
-        final data = doc.data();
-        final subjectId = doc.id;
-
-        String facultyName = "Faculty";
-        if (data['createdBy'] != null &&
-            data['createdBy'].toString().isNotEmpty) {
-          try {
-            final facultyDoc = await firestore
-                .collection('users')
-                .doc(data['createdBy'])
-                .get();
-            facultyName = facultyDoc.data()?['name'] ?? "Admin";
-          } catch (e) {
-            facultyName = "Admin";
-          }
-        }
-
-        final attendanceQuery = await firestore
-            .collection('attendance')
-            .where('uid', isEqualTo: user.uid)
-            .where('subjectId', isEqualTo: subjectId)
-            .get();
-
-        Map<String, String> attendanceMap = {};
-        for (var att in attendanceQuery.docs) {
-          final date = (att['timestamp'] as Timestamp).toDate();
-          final dateKey = DateFormat('yyyy-MM-dd').format(date);
-          attendanceMap[dateKey] = att['status'] ?? 'Present';
-        }
-
-        final List rawSchedule = data['schedule'] ?? [];
-        List<Map<String, dynamic>> fullSessionHistory = [];
-        int subjectTotal = 0;
-        int subjectPresent = 0;
-
-        for (var session in rawSchedule) {
-          if (session['date'] is! Timestamp) continue;
-          DateTime sessionDate = (session['date'] as Timestamp).toDate();
-          final dateKey = DateFormat('yyyy-MM-dd').format(sessionDate);
-          final endParts = session['endTime'].split(':');
-          final DateTime sessionEndFull = DateTime(
-            sessionDate.year,
-            sessionDate.month,
-            sessionDate.day,
-            int.parse(endParts[0]),
-            int.parse(endParts[1]),
-          );
-
-          String status = "Upcoming";
-
-          if (attendanceMap.containsKey(dateKey)) {
-            status = attendanceMap[dateKey]!;
-          } else if (DateTime.now().isAfter(sessionEndFull)) {
-            final globalCheck = await firestore
-                .collection('attendance')
-                .where('subjectId', isEqualTo: subjectId)
-                .where('dateKey', isEqualTo: dateKey)
-                .limit(1)
-                .get();
-
-            if (globalCheck.docs.isNotEmpty) {
-              status = "Absent";
-            } else {
-              status = "Not Marked";
+        if (sessionId == null && data['activeSessionId'] != null) {
+          Future.microtask(() {
+            if (ref.mounted) {
+              ref.read(selectedSessionProvider.notifier).state =
+                  data['activeSessionId'].toString();
             }
-          }
-
-          if (status == 'Present') subjectPresent++;
-          if (status == 'Present' || status == 'Absent') subjectTotal++;
-
-          fullSessionHistory.add({
-            'date': sessionDate,
-            'startTime': session['startTime'],
-            'endTime': session['endTime'],
-            'status': status,
-            'topic': "Lab Session",
           });
         }
 
-        fullSessionHistory.sort((a, b) => a['date'].compareTo(b['date']));
-        globalTotal += subjectTotal;
-        globalPresent += subjectPresent;
+        List<Map<String, dynamic>> parsedSubjects = [];
+        final subjectsList = data['subjects'] as List? ?? [];
 
-        finalSubjects.add({
-          'id': subjectId,
-          'name': data['name'] ?? 'Unknown Subject',
-          'code': data['code'] ?? '---',
-          'faculty': facultyName,
-          'total': subjectTotal,
-          'attended': subjectPresent,
-          'sessions': fullSessionHistory,
-        });
+        for (var sub in subjectsList) {
+          List<Map<String, dynamic>> parsedSessions = [];
+          final sessionsList = sub['sessions'] as List? ?? [];
+
+          for (var ses in sessionsList) {
+            DateTime parsedDate = DateTime.now();
+            if (ses['date'] != null) {
+              parsedDate =
+                  DateTime.tryParse(ses['date'].toString()) ?? DateTime.now();
+            }
+
+            parsedSessions.add({...ses, 'date': parsedDate});
+          }
+          parsedSubjects.add({...sub, 'sessions': parsedSessions});
+        }
+
+        return AttendanceData(
+          subjects: parsedSubjects,
+          overallPercentage:
+              (data['overallPercentage'] as num?)?.toDouble() ?? 0.0,
+          totalClasses: (data['totalClasses'] as num?)?.toInt() ?? 0,
+          totalPresent: (data['totalPresent'] as num?)?.toInt() ?? 0,
+          activeSessionId: data['activeSessionId']?.toString() ?? '',
+          activeSessionName:
+              data['activeSessionName']?.toString() ?? 'No Active Session',
+        );
+      } else {
+        throw Exception("Failed to load attendance data");
       }
-
-      finalSubjects.sort((a, b) => a['code'].compareTo(b['code']));
-
-      double overall = globalTotal == 0 ? 0.0 : (globalPresent / globalTotal);
-      return AttendanceData(
-        subjects: finalSubjects,
-        overallPercentage: overall,
-        totalClasses: globalTotal,
-        totalPresent: globalPresent,
-        activeSessionId: targetSessionId,
-        activeSessionName: targetSessionName,
-      );
     });
 
 class AttendanceScreen extends ConsumerWidget {
@@ -411,9 +298,11 @@ class AttendanceScreen extends ConsumerWidget {
                   slivers: [
                     SliverToBoxAdapter(
                       child: Padding(
-                        padding: const EdgeInsets.all(24),
+                        padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
                         child: _OverallStatsCard(
-                          percentage: data.overallPercentage,
+                          percentage: data.overallPercentage > 1
+                              ? data.overallPercentage / 100
+                              : data.overallPercentage,
                           total: data.totalClasses,
                           present: data.totalPresent,
                           theme: theme,
@@ -429,7 +318,6 @@ class AttendanceScreen extends ConsumerWidget {
                         }, childCount: data.subjects.length),
                       ),
                     ),
-                    const SliverToBoxAdapter(child: SizedBox(height: 40)),
                   ],
                 );
               },
@@ -524,7 +412,7 @@ class AttendanceScreen extends ConsumerWidget {
                           ),
                           const SizedBox(width: 16),
                           Text(
-                            session['name']!,
+                            session['name'] ?? '',
                             style: TextStyle(
                               fontSize: 14,
                               fontWeight: isSelected
@@ -640,7 +528,7 @@ class _OverallStatsCard extends StatelessWidget {
                 ),
                 Text(
                   "Present: $present",
-                  style: TextStyle(
+                  style: const TextStyle(
                     color: Colors.greenAccent,
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
@@ -669,11 +557,21 @@ class _SubjectCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final double percentage = data['total'] == 0
+    final int totalClasses = (data['total'] as num?)?.toInt() ?? 0;
+    final int attendedClasses = (data['attended'] as num?)?.toInt() ?? 0;
+
+    final double percentage = totalClasses == 0
         ? 0.0
-        : data['attended'] / data['total'];
+        : attendedClasses / totalClasses;
     final int percentInt = (percentage * 100).toInt();
     final Color statusColor = _getColor(percentage);
+
+    final String code = data['code']?.toString() ?? '---';
+    final String name = data['name']?.toString() ?? 'Unknown Subject';
+    final String faculty =
+        data['faculty']?.toString() ?? 'Faculty Not Assigned';
+    final String codeDisplay = code.contains('-') ? code.split('-').last : code;
+    final String heroId = data['id']?.toString() ?? UniqueKey().toString();
 
     return GestureDetector(
       onTap: () {
@@ -713,7 +611,7 @@ class _SubjectCard extends StatelessWidget {
                     ),
                     child: Center(
                       child: Text(
-                        data['code'].split('-').last,
+                        codeDisplay,
                         style: TextStyle(
                           color: theme.primaryColor,
                           fontWeight: FontWeight.w900,
@@ -728,11 +626,11 @@ class _SubjectCard extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Hero(
-                          tag: 'title_${data['id']}',
+                          tag: 'title_$heroId',
                           child: Material(
                             color: Colors.transparent,
                             child: Text(
-                              data['name'],
+                              name,
                               style: const TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w800,
@@ -745,7 +643,7 @@ class _SubjectCard extends StatelessWidget {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          data['faculty'],
+                          faculty,
                           style: TextStyle(
                             fontSize: 12,
                             color: Colors.grey[500],
@@ -780,15 +678,15 @@ class _SubjectCard extends StatelessWidget {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  _MiniStat(label: 'Total', value: '${data['total']}'),
+                  _MiniStat(label: 'Total', value: '$totalClasses'),
                   _MiniStat(
                     label: 'Present',
-                    value: '${data['attended']}',
+                    value: '$attendedClasses',
                     color: const Color(0xFF10B981),
                   ),
                   _MiniStat(
                     label: 'Absent',
-                    value: '${data['total'] - data['attended']}',
+                    value: '${totalClasses - attendedClasses}',
                     color: const Color(0xFFEF4444),
                   ),
                 ],
@@ -850,11 +748,21 @@ class SubjectDetailScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final List sessions = data['sessions'] ?? [];
-    final double percentage = data['total'] == 0
+    final List sessions = data['sessions'] as List? ?? [];
+
+    final int totalClasses = (data['total'] as num?)?.toInt() ?? 0;
+    final int attendedClasses = (data['attended'] as num?)?.toInt() ?? 0;
+
+    final double percentage = totalClasses == 0
         ? 0.0
-        : data['attended'] / data['total'];
+        : attendedClasses / totalClasses;
     final int percentInt = (percentage * 100).toInt();
+
+    final String code = data['code']?.toString() ?? '---';
+    final String name = data['name']?.toString() ?? 'Unknown Subject';
+    final String faculty =
+        data['faculty']?.toString() ?? 'Faculty Not Assigned';
+    final String heroId = data['id']?.toString() ?? UniqueKey().toString();
 
     Color getStatusColor(String status) {
       if (status == 'Present') return const Color(0xFF10B981);
@@ -903,7 +811,7 @@ class SubjectDetailScreen extends StatelessWidget {
                 ),
                 child: Center(
                   child: Hero(
-                    tag: 'progress_${data['id']}',
+                    tag: 'progress_$heroId',
                     child: SizedBox(
                       width: 100,
                       height: 100,
@@ -957,11 +865,11 @@ class SubjectDetailScreen extends StatelessWidget {
               child: Column(
                 children: [
                   Hero(
-                    tag: 'title_${data['id']}',
+                    tag: 'title_$heroId',
                     child: Material(
                       color: Colors.transparent,
                       child: Text(
-                        data['name'],
+                        name,
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                           fontSize: 16,
@@ -984,7 +892,7 @@ class SubjectDetailScreen extends StatelessWidget {
                       border: Border.all(color: Colors.grey.withOpacity(0.2)),
                     ),
                     child: Text(
-                      "${data['code']} • ${data['faculty']}",
+                      "$code • $faculty",
                       style: TextStyle(
                         fontSize: 12,
                         color: Colors.grey[600],
@@ -993,9 +901,9 @@ class SubjectDetailScreen extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 32),
-                  Align(
+                  const Align(
                     alignment: Alignment.centerLeft,
-                    child: const Text(
+                    child: Text(
                       "Session History",
                       style: TextStyle(
                         fontSize: 14,
@@ -1021,8 +929,19 @@ class SubjectDetailScreen extends StatelessWidget {
               sliver: SliverList(
                 delegate: SliverChildBuilderDelegate((context, index) {
                   final session = sessions[index];
-                  final String status = session['status'];
-                  final DateTime dateObj = session['date'];
+
+                  final String status =
+                      session['status']?.toString() ?? 'Unknown';
+                  final String topic =
+                      session['topic']?.toString() ?? 'Lab Session';
+                  final String startTime =
+                      session['startTime']?.toString() ?? '--:--';
+                  final String endTime =
+                      session['endTime']?.toString() ?? '--:--';
+
+                  final DateTime dateObj = session['date'] is DateTime
+                      ? session['date']
+                      : DateTime.now();
 
                   final date = DateFormat('dd MMM').format(dateObj);
                   final day = DateFormat('EEE').format(dateObj);
@@ -1043,7 +962,7 @@ class SubjectDetailScreen extends StatelessWidget {
                         BoxShadow(
                           color: Colors.black.withOpacity(0.02),
                           blurRadius: 5,
-                          offset: Offset(0, 2),
+                          offset: const Offset(0, 2),
                         ),
                       ],
                     ),
@@ -1081,7 +1000,7 @@ class SubjectDetailScreen extends StatelessWidget {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                session['topic'],
+                                topic,
                                 style: const TextStyle(
                                   fontWeight: FontWeight.w700,
                                   fontSize: 14,
@@ -1089,7 +1008,7 @@ class SubjectDetailScreen extends StatelessWidget {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                "${session['startTime']} - ${session['endTime']}",
+                                "$startTime - $endTime",
                                 style: TextStyle(
                                   fontSize: 11,
                                   color: Colors.grey[500],

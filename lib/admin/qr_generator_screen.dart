@@ -1,11 +1,13 @@
 import 'dart:convert';
 import 'dart:ui' as ui;
 import 'dart:typed_data';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:image_gallery_saver_plus/image_gallery_saver_plus.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import '../../utils/api_config.dart'; // Apna API config path verify kar lena
 import '../../utils/custom_toast.dart';
 import '../../widgets/geometric_loader.dart';
 
@@ -17,17 +19,43 @@ class QRGeneratorScreen extends StatefulWidget {
 }
 
 class _QRGeneratorScreenState extends State<QRGeneratorScreen> {
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-
   String? _selectedLabId;
   String _selectedLabName = 'Select Lab';
   int _totalPCs = 0;
+
+  Future<List<dynamic>> _fetchLabs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('auth_token');
+
+      final response = await http
+          .get(
+            Uri.parse("${ApiConfig.baseUrl}/labs"),
+            headers: {
+              'Authorization': 'Bearer $token',
+              'Accept': 'application/json',
+            },
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        return data['labs'] ?? [];
+      } else {
+        throw Exception("Failed to load labs. Server error.");
+      }
+    } catch (e) {
+      throw Exception("Network error: $e");
+    }
+  }
 
   Future<void> _saveQrToGallery(String data, String pcNumber) async {
     try {
       if (await Permission.photos.request().isDenied &&
           await Permission.storage.request().isDenied) {
-        CustomToast.show(context, "Permission Denied!", isError: true);
+        if (mounted) {
+          CustomToast.show(context, "Permission Denied!", isError: true);
+        }
         return;
       }
 
@@ -39,7 +67,7 @@ class _QRGeneratorScreenState extends State<QRGeneratorScreen> {
 
       if (qrValidationResult.status == QrValidationStatus.valid) {
         final qrCode = qrValidationResult.qrCode!;
-        final size = 1024.0;
+        const size = 1024.0;
         final painter = QrPainter.withQr(
           qr: qrCode,
           color: const Color(0xFF000000),
@@ -50,7 +78,7 @@ class _QRGeneratorScreenState extends State<QRGeneratorScreen> {
         final recorder = ui.PictureRecorder();
         final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, size, size));
 
-        painter.paint(canvas, Size(size, size));
+        painter.paint(canvas, const Size(size, size));
 
         final textStyle = ui.TextStyle(
           color: const Color(0xFF000000),
@@ -69,7 +97,7 @@ class _QRGeneratorScreenState extends State<QRGeneratorScreen> {
         final paint = Paint()..color = const Color(0xFFFFFFFF);
         final rRect = RRect.fromRectAndRadius(
           Rect.fromCenter(
-            center: Offset(size / 2, size / 2),
+            center: const Offset(size / 2, size / 2),
             width: centerBoxSize,
             height: centerBoxSize * 0.7,
           ),
@@ -143,18 +171,29 @@ class _QRGeneratorScreenState extends State<QRGeneratorScreen> {
               ),
               const SizedBox(height: 16),
               Expanded(
-                child: StreamBuilder<QuerySnapshot>(
-                  stream: _firestore
-                      .collection('labs')
-                      .orderBy('createdAt', descending: true)
-                      .snapshots(),
+                child: FutureBuilder<List<dynamic>>(
+                  future: _fetchLabs(),
                   builder: (context, snapshot) {
-                    if (!snapshot.hasData) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
                       return const Center(
                         child: GeometricLoader(size: 30, isDarkMode: false),
                       );
                     }
-                    final labs = snapshot.data!.docs;
+
+                    if (snapshot.hasError) {
+                      return Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(20.0),
+                          child: Text(
+                            "Error loading labs.\n${snapshot.error}",
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Colors.red),
+                          ),
+                        ),
+                      );
+                    }
+
+                    final labs = snapshot.data ?? [];
 
                     if (labs.isEmpty) {
                       return const Center(
@@ -168,8 +207,16 @@ class _QRGeneratorScreenState extends State<QRGeneratorScreen> {
                       separatorBuilder: (_, __) =>
                           const Divider(height: 1, indent: 24),
                       itemBuilder: (context, index) {
-                        final data = labs[index].data() as Map<String, dynamic>;
-                        final isSelected = _selectedLabId == labs[index].id;
+                        final data = labs[index];
+                        final String labId = data['id'].toString();
+                        final String labName =
+                            data['lab_name'] ??
+                            data['labName'] ??
+                            'Unknown Lab';
+                        final int totalPcs =
+                            data['total_pcs'] ?? data['totalPCs'] ?? 0;
+
+                        final isSelected = _selectedLabId == labId;
 
                         return ListTile(
                           contentPadding: const EdgeInsets.symmetric(
@@ -194,7 +241,7 @@ class _QRGeneratorScreenState extends State<QRGeneratorScreen> {
                             ),
                           ),
                           title: Text(
-                            data['labName'],
+                            labName,
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
                               color: isSelected
@@ -202,7 +249,7 @@ class _QRGeneratorScreenState extends State<QRGeneratorScreen> {
                                   : Colors.black,
                             ),
                           ),
-                          subtitle: Text("${data['totalPCs']} Computers"),
+                          subtitle: Text("$totalPcs Computers"),
                           trailing: isSelected
                               ? Icon(
                                   Icons.check_circle,
@@ -211,9 +258,9 @@ class _QRGeneratorScreenState extends State<QRGeneratorScreen> {
                               : null,
                           onTap: () {
                             setState(() {
-                              _selectedLabId = labs[index].id;
-                              _selectedLabName = data['labName'];
-                              _totalPCs = data['totalPCs'];
+                              _selectedLabId = labId;
+                              _selectedLabName = labName;
+                              _totalPCs = totalPcs;
                             });
                             Navigator.pop(context);
                           },
@@ -337,7 +384,7 @@ class _QRGeneratorScreenState extends State<QRGeneratorScreen> {
                       ),
                       const SizedBox(width: 6),
                       Text(
-                        "Showing $_totalPCs unique QR codes for ${_selectedLabName}",
+                        "Showing $_totalPCs unique QR codes for $_selectedLabName",
                         style: const TextStyle(
                           fontSize: 11,
                           color: Colors.grey,
@@ -370,7 +417,7 @@ class _QRGeneratorScreenState extends State<QRGeneratorScreen> {
                         "a": "E",
                         "l": _selectedLabId,
                         "p": pcNumber,
-                        "k": "KEY_${_selectedLabId}_${pcNumber}",
+                        "k": "KEY_${_selectedLabId}_$pcNumber",
                         "t": DateTime.now().millisecondsSinceEpoch,
                       };
 

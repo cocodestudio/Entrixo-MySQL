@@ -1,13 +1,14 @@
+import 'dart:convert';
 import 'dart:io';
-import 'dart:ui';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:dio/dio.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:open_file/open_file.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../utils/api_config.dart';
 import '../widgets/geometric_loader.dart';
 import '../utils/custom_toast.dart';
 
@@ -20,32 +21,62 @@ class StudentAssignmentScreen extends StatefulWidget {
 }
 
 class _StudentAssignmentScreenState extends State<StudentAssignmentScreen> {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-
-  Map<String, dynamic>? _studentData;
-  bool _isLoadingProfile = true;
+  List<dynamic> _assignments = [];
+  bool _isLoading = true;
+  String _errorMessage = '';
 
   @override
   void initState() {
     super.initState();
-    _fetchStudentProfile();
+    _fetchAssignments();
   }
 
-  Future<void> _fetchStudentProfile() async {
+  Future<String?> _getToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('auth_token');
+  }
+
+  Future<void> _fetchAssignments() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = '';
+    });
+
     try {
-      final user = _auth.currentUser;
-      if (user != null) {
-        final doc = await _firestore.collection('users').doc(user.uid).get();
+      final token = await _getToken();
+
+      // Backend directly handles filtering based on the logged-in student's course & semester
+      final response = await http.get(
+        Uri.parse(ApiConfig.studentAssignments),
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
         if (mounted) {
           setState(() {
-            _studentData = doc.data();
-            _isLoadingProfile = false;
+            _assignments = data['data'] ?? [];
+            _isLoading = false;
+          });
+        }
+      } else {
+        if (mounted) {
+          setState(() {
+            _errorMessage = 'Failed to load assignments';
+            _isLoading = false;
           });
         }
       }
     } catch (e) {
-      if (mounted) setState(() => _isLoadingProfile = false);
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'Network Error. Please try again.';
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -91,79 +122,52 @@ class _StudentAssignmentScreenState extends State<StudentAssignmentScreen> {
           onPressed: () => Navigator.pop(context),
         ),
       ),
-      body: _isLoadingProfile
-          ? Center(child: GeometricLoader(size: 45, isDarkMode: false))
+      body: _isLoading
+          ? const Center(child: GeometricLoader(size: 45, isDarkMode: false))
           : _buildAssignmentList(theme),
     );
   }
 
   Widget _buildAssignmentList(ThemeData theme) {
-    final String myCourseId = _studentData?['courseId'] ?? 'UNKNOWN';
-    final String mySemester =
-        _studentData?['currentSemester']?.toString() ?? '1';
-
-    return StreamBuilder<QuerySnapshot>(
-      stream: _firestore
-          .collection('resources')
-          .where('type', isEqualTo: 'Assignment') // Filter only Assignments
-          .orderBy('uploadedAt', descending: true)
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.error_outline_rounded,
-                  size: 40,
-                  color: Colors.red.withOpacity(0.5),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  "Unable to load assignments",
-                  style: TextStyle(
-                    color: Colors.grey[600],
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
+    if (_errorMessage.isNotEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.error_outline_rounded,
+              size: 40,
+              color: Colors.red.withOpacity(0.5),
             ),
-          );
-        }
+            const SizedBox(height: 12),
+            Text(
+              _errorMessage,
+              style: TextStyle(
+                color: Colors.grey[600],
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextButton.icon(
+              onPressed: _fetchAssignments,
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text("Retry"),
+            ),
+          ],
+        ),
+      );
+    }
 
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return Center(child: GeometricLoader(size: 40, isDarkMode: false));
-        }
+    if (_assignments.isEmpty) {
+      return _buildEmptyState();
+    }
 
-        final docs = snapshot.data!.docs;
-
-        // Smart Client-Side Filtering
-        final filteredDocs = docs.where((doc) {
-          final data = doc.data() as Map<String, dynamic>;
-          final String targetCourse = data['courseId'] ?? 'ALL';
-          final String targetSem = data['semester']?.toString() ?? 'ALL';
-
-          final bool courseMatch =
-              targetCourse == 'ALL' || targetCourse == myCourseId;
-          final bool semMatch = targetSem == 'ALL' || targetSem == mySemester;
-
-          return courseMatch && semMatch;
-        }).toList();
-
-        if (filteredDocs.isEmpty) {
-          return _buildEmptyState();
-        }
-
-        return ListView.builder(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-          physics: const BouncingScrollPhysics(),
-          itemCount: filteredDocs.length,
-          itemBuilder: (context, index) {
-            final data = filteredDocs[index].data() as Map<String, dynamic>;
-            return _AssignmentCard(data: data, theme: theme);
-          },
-        );
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      physics: const BouncingScrollPhysics(),
+      itemCount: _assignments.length,
+      itemBuilder: (context, index) {
+        return _AssignmentCard(data: _assignments[index], theme: theme);
       },
     );
   }
@@ -236,18 +240,18 @@ class _AssignmentCardState extends State<_AssignmentCard> {
   double _progress = 0.0;
 
   Future<void> _handleAction() async {
-    final String? fileUrl = widget.data['fileUrl'];
+    final String? fileUrl = widget.data['file_url'];
     final String? link = widget.data['link'];
     final String title = widget.data['title'] ?? 'Assignment';
-    final String? ext = widget.data['fileExtension'];
+    final String? ext = widget.data['file_extension'];
 
     if (fileUrl != null && fileUrl.isNotEmpty) {
       await _downloadFile(fileUrl, title, ext);
     } else if (link != null && link.isNotEmpty) {
       await _launchURL(link);
     } else {
-      // If no file/link, check for rules
-      if (widget.data['rules'] != null && widget.data['rules'].isNotEmpty) {
+      if (widget.data['rules'] != null &&
+          widget.data['rules'].toString().isNotEmpty) {
         _showRulesSheet();
       } else {
         CustomToast.show(context, "No attachment available", isError: true);
@@ -283,7 +287,7 @@ class _AssignmentCardState extends State<_AssignmentCard> {
             const SizedBox(height: 24),
             Row(
               children: [
-                Icon(Icons.gavel_rounded, color: Colors.orange, size: 24),
+                const Icon(Icons.gavel_rounded, color: Colors.orange, size: 24),
                 const SizedBox(width: 12),
                 const Text(
                   "Instructions",
@@ -352,8 +356,10 @@ class _AssignmentCardState extends State<_AssignmentCard> {
       dir = await getExternalStorageDirectory();
     }
 
+    // Sanitize filename to avoid saving issues
+    final sanitizedFileName = fileName.replaceAll(RegExp(r'[^\w\s]+'), '');
     final String savePath =
-        "${dir?.path}/${fileName}_${DateTime.now().millisecondsSinceEpoch}.${extension ?? 'pdf'}";
+        "${dir?.path}/${sanitizedFileName}_${DateTime.now().millisecondsSinceEpoch}.${extension ?? 'pdf'}";
 
     setState(() => _isDownloading = true);
 
@@ -386,25 +392,28 @@ class _AssignmentCardState extends State<_AssignmentCard> {
     }
   }
 
-  // --- UI HELPERS ---
-
   Color _getAccentColor() {
-    // Assignments generally use Orange/Amber theme
     return const Color(0xFFFF9F43);
   }
 
   @override
   Widget build(BuildContext context) {
-    final String? fileUrl = widget.data['fileUrl'];
+    final String? fileUrl = widget.data['file_url'];
     final String? link = widget.data['link'];
     final String? rules = widget.data['rules'];
-    final String? ext = widget.data['fileExtension'];
-    final Timestamp? date = widget.data['uploadedAt'];
-    final bool hasRules = rules != null && rules.isNotEmpty;
+    final String? ext = widget.data['file_extension'];
+
+    // Parse date securely
+    final String rawDate = widget.data['created_at'] ?? '';
+    DateTime? date;
+    if (rawDate.isNotEmpty) {
+      date = DateTime.tryParse(rawDate);
+    }
+
+    final bool hasRules = rules != null && rules.toString().isNotEmpty;
     final bool isLink =
         (fileUrl == null || fileUrl.isEmpty) &&
         (link != null && link.isNotEmpty);
-
     final Color accentColor = _getAccentColor();
 
     return Container(
@@ -430,7 +439,6 @@ class _AssignmentCardState extends State<_AssignmentCard> {
             padding: const EdgeInsets.all(16),
             child: Row(
               children: [
-                // Premium Icon Box (Assignment Style)
                 SizedBox(
                   width: 56,
                   height: 56,
@@ -459,8 +467,6 @@ class _AssignmentCardState extends State<_AssignmentCard> {
                   ),
                 ),
                 const SizedBox(width: 16),
-
-                // Content
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -487,7 +493,7 @@ class _AssignmentCardState extends State<_AssignmentCard> {
                             ),
                             const SizedBox(width: 4),
                             Text(
-                              DateFormat('dd MMM').format(date.toDate()),
+                              DateFormat('dd MMM').format(date),
                               style: TextStyle(
                                 fontSize: 11,
                                 color: Colors.grey[500],
@@ -527,10 +533,7 @@ class _AssignmentCardState extends State<_AssignmentCard> {
                     ],
                   ),
                 ),
-
                 const SizedBox(width: 12),
-
-                // Action Buttons
                 Row(
                   children: [
                     if (hasRules)

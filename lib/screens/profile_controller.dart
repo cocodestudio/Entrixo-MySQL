@@ -1,14 +1,12 @@
 import 'dart:io';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart' as path_provider;
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/api_config.dart';
 
 class ProfileState {
   final bool isLoading;
@@ -17,6 +15,8 @@ class ProfileState {
   final String name;
   final String email;
   final String role;
+  final String phoneNumber;
+  final String rollNumber;
 
   ProfileState({
     this.isLoading = false,
@@ -25,6 +25,8 @@ class ProfileState {
     this.name = '',
     this.email = '',
     this.role = 'student',
+    this.phoneNumber = '',
+    this.rollNumber = '',
   });
 
   ProfileState copyWith({
@@ -34,126 +36,113 @@ class ProfileState {
     String? name,
     String? email,
     String? role,
+    String? phoneNumber,
+    String? rollNumber,
+    bool clearPickedImage = false,
   }) {
     return ProfileState(
       isLoading: isLoading ?? this.isLoading,
-      pickedImage: pickedImage ?? this.pickedImage,
+      pickedImage: clearPickedImage ? null : (pickedImage ?? this.pickedImage),
       profileUrl: profileUrl ?? this.profileUrl,
       name: name ?? this.name,
       email: email ?? this.email,
       role: role ?? this.role,
+      phoneNumber: phoneNumber ?? this.phoneNumber,
+      rollNumber: rollNumber ?? this.rollNumber,
     );
   }
 }
 
-final userStreamProvider = StreamProvider<ProfileState>((ref) {
-  final user = FirebaseAuth.instance.currentUser;
-  if (user == null) return Stream.value(ProfileState());
+final userProfileProvider = FutureProvider.autoDispose<ProfileState>((ref) async {
+  final prefs = await SharedPreferences.getInstance();
+  final token = prefs.getString('auth_token');
+  if (token == null || token.isEmpty) return ProfileState(role: 'guest');
 
-  return FirebaseFirestore.instance
-      .collection('users')
-      .doc(user.uid)
-      .snapshots()
-      .map((doc) {
-        if (doc.exists) {
-          final data = doc.data()!;
-          return ProfileState(
-            name: data['name'] ?? '',
-            email: data['email'] ?? '',
-            profileUrl: data['profilePic'] ?? '',
-            role: data['role'] ?? 'student',
-            isLoading: false,
-          );
-        }
-        return ProfileState();
-      });
+  try {
+    final response = await http.get(
+      Uri.parse("${ApiConfig.baseUrl}/me"),
+      headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
+    );
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body)['user'];
+      return ProfileState(
+        name: data['name'] ?? '',
+        email: data['email'] ?? '',
+        profileUrl: data['profile_pic'],
+        role: data['role'].toString().toLowerCase().trim(),
+        phoneNumber: data['phone_number'] ?? 'N/A',
+        rollNumber: data['roll_number'] ?? 'N/A',
+      );
+    }
+    throw Exception("Error");
+  } catch (e) {
+    rethrow;
+  }
 });
 
-final profileControllerProvider =
-    StateNotifierProvider<ProfileController, ProfileState>((ref) {
-      final streamData = ref.watch(userStreamProvider).value ?? ProfileState();
-      return ProfileController(streamData);
-    });
+final profileControllerProvider = StateNotifierProvider<ProfileController, ProfileState>((ref) {
+  final asyncData = ref.watch(userProfileProvider);
+  return ProfileController(ref, asyncData.value ?? ProfileState());
+});
 
 class ProfileController extends StateNotifier<ProfileState> {
-  ProfileController(ProfileState initialState) : super(initialState);
+  final Ref _ref;
+  ProfileController(this._ref, super.initialState);
 
-  final _auth = FirebaseAuth.instance;
-  final _firestore = FirebaseFirestore.instance;
-  final _storage = FirebaseStorage.instance;
   final _picker = ImagePicker();
 
-  Future<void> pickImage(dynamic context) async {
-    try {
-      final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
-      if (image != null) {
-        state = state.copyWith(pickedImage: File(image.path));
-      }
-    } catch (e) {
-      debugPrint('Error picking image: $e');
+  Future<void> pickImage() async {
+    final XFile? image = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 70);
+    if (image != null) {
+      state = state.copyWith(pickedImage: File(image.path));
     }
   }
 
-  Future<void> saveProfile(
-    dynamic context,
-    String newName,
-    String newEmail, {
+  Future<void> saveProfile({
+    required String newName,
+    required String newEmail,
     VoidCallback? onSuccess,
     Function(String)? onError,
   }) async {
-    final user = _auth.currentUser;
-    if (user == null) return;
-
     state = state.copyWith(isLoading: true);
-
     try {
-      String? downloadUrl = state.profileUrl;
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('auth_token');
+
+      var request = http.MultipartRequest('POST', Uri.parse("${ApiConfig.baseUrl}/update-profile"));
+      request.headers.addAll({'Authorization': 'Bearer $token', 'Accept': 'application/json'});
+      request.fields['name'] = newName;
+      request.fields['email'] = newEmail;
 
       if (state.pickedImage != null) {
-        final dir = await path_provider.getTemporaryDirectory();
-        final targetPath = p.join(dir.absolute.path, "${user.uid}_temp.jpg");
+        request.files.add(await http.MultipartFile.fromPath('profile_pic', state.pickedImage!.path));
+      }
 
-        XFile? compressedFile = await FlutterImageCompress.compressAndGetFile(
-          state.pickedImage!.absolute.path,
-          targetPath,
-          quality: 70,
-          format: CompressFormat.jpeg,
+      final response = await http.Response.fromStream(await request.send());
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        final data = json.decode(response.body);
+        final String newUrl = data['user']['profile_pic'];
+        print(newUrl);
+        print(data['profile_pic']);
+
+        state = state.copyWith(
+          isLoading: false,
+          name: newName,
+          email: newEmail,
+          profileUrl: "$newUrl?v=${DateTime.now().millisecondsSinceEpoch}",
+          clearPickedImage: true,
         );
 
-        if (compressedFile != null) {
-          final ref = _storage
-              .ref()
-              .child('user_profiles')
-              .child('${user.uid}.jpg');
-
-          await ref.putFile(File(compressedFile.path));
-          downloadUrl = await ref.getDownloadURL();
-        }
+        _ref.invalidate(userProfileProvider);
+        if (onSuccess != null) onSuccess();
+      } else {
+        throw Exception("Server Error");
       }
-      if (!mounted) return;
-
-      await _firestore.collection('users').doc(user.uid).update({
-        'name': newName,
-        'email': newEmail,
-        'profilePic': downloadUrl,
-      });
-
-      if (!mounted) return;
-
-      state = state.copyWith(
-        isLoading: false,
-        profileUrl: downloadUrl,
-        name: newName,
-        email: newEmail,
-        pickedImage: null,
-      );
-
-      if (onSuccess != null) onSuccess();
     } catch (e) {
-      if (mounted) {
-        state = state.copyWith(isLoading: false);
-        if (onError != null) onError(e.toString());
-      }
+      state = state.copyWith(isLoading: false);
+      if (onError != null) onError(e.toString());
     }
   }
 }

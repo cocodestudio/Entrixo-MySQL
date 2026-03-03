@@ -1,15 +1,17 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:io';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:intl/intl.dart';
+import 'package:http/http.dart' as http;
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import '../utils/api_config.dart'; // Make sure this path is correct
 import '../home/student_dashboard_components.dart';
 import 'attendance_screen.dart';
 
@@ -70,14 +72,30 @@ class _StudentScannerScreenState extends ConsumerState<StudentScannerScreen>
     }
   }
 
+  Future<Map<String, String>> getDeviceInfo() async {
+    DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
+    String model = "Unknown Device";
+    String identifier = "Unknown ID";
+
+    if (Platform.isAndroid) {
+      AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
+      model = "${androidInfo.brand.toUpperCase()} ${androidInfo.model}";
+      identifier = androidInfo.id;
+    } else if (Platform.isIOS) {
+      IosDeviceInfo iosInfo = await deviceInfo.iosInfo;
+      model = iosInfo.name;
+      identifier = iosInfo.identifierForVendor ?? "Unknown ID";
+    }
+
+    return {'model': model, 'id': identifier};
+  }
+
   Future<void> _checkPermissions() async {
     final status = await Permission.camera.request();
     if (status.isGranted) {
       await _controller.start();
     } else if (status.isPermanentlyDenied) {
-      if (mounted) {
-        _showPermissionDialog();
-      }
+      if (mounted) _showPermissionDialog();
     }
   }
 
@@ -126,137 +144,47 @@ class _StudentScannerScreenState extends ConsumerState<StudentScannerScreen>
     });
 
     try {
-      final firestore = FirebaseFirestore.instance;
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) throw "User not authenticated";
+      _updateStatus("Verifying Device Info...", Colors.blue);
 
-      _updateStatus("Detecting Student Profile...", Colors.blue);
-      final userDoc = await firestore.collection('users').doc(user.uid).get();
-      final userData = userDoc.data();
-      if (userData == null) throw "User profile not found";
-
-      final String courseId = userData['courseId'];
-      final int semester = userData['currentSemester'] ?? 1;
-
-      final activeSessionQuery = await firestore
-          .collection('academic_sessions')
-          .where('status', isEqualTo: 'Active')
-          .limit(1)
-          .get();
-
-      if (activeSessionQuery.docs.isEmpty)
-        throw "No active academic session found";
-      final String sessionId = activeSessionQuery.docs.first.id;
-
-      String? targetLabId;
-      try {
-        final Map<String, dynamic> data = jsonDecode(qrData);
-        if (data['a'] != "E") throw "Invalid QR";
-        targetLabId = data['l'];
-      } catch (e) {
-        throw "Invalid QR Format! Please scan the official Lab QR.";
-      }
-
-      _updateStatus("Verifying Schedule...", Colors.teal);
-      final now = DateTime.now();
-      String? currentSubjectId;
-      String? uniqueKey;
-      bool labFoundForToday = false;
-
-      final subjectsQuery = await firestore
-          .collection('subjects')
-          .where('courseId', isEqualTo: courseId)
-          .where('semester', isEqualTo: semester)
-          .where('sessionId', isEqualTo: sessionId)
-          .get();
-
-      for (var doc in subjectsQuery.docs) {
-        final subData = doc.data();
-        final List schedule = subData['schedule'] ?? [];
-
-        for (var item in schedule) {
-          final DateTime sessionDate = (item['date'] as Timestamp).toDate();
-
-          if (DateUtils.isSameDay(sessionDate, now)) {
-            labFoundForToday = true;
-
-            final String startTimeStr = item['startTime'];
-            final String endTimeStr = item['endTime'];
-            final sParts = startTimeStr.split(':');
-            final eParts = endTimeStr.split(':');
-
-            final DateTime labStartTime = DateTime(
-              now.year,
-              now.month,
-              now.day,
-              int.parse(sParts[0]),
-              int.parse(sParts[1]),
-            );
-            final DateTime labEndTime = DateTime(
-              now.year,
-              now.month,
-              now.day,
-              int.parse(eParts[0]),
-              int.parse(eParts[1]),
-            );
-
-            final DateTime windowStart = labEndTime.subtract(
-              const Duration(minutes: 15),
-            );
-
-            if (now.isAfter(labStartTime) && now.isBefore(labEndTime)) {
-              if (now.isAfter(windowStart)) {
-                currentSubjectId = doc.id;
-                uniqueKey =
-                    "ATT_${user.uid}_${currentSubjectId}_${DateFormat('yyyyMMdd').format(now)}";
-                break;
-              } else {
-                final int waitMins = windowStart.difference(now).inMinutes;
-                throw "Too Early! Attendance window opens in $waitMins minutes.";
-              }
-            }
-          }
-        }
-        if (currentSubjectId != null) break;
-      }
-
-      if (!labFoundForToday) throw "No Lab scheduled for your batch today.";
-      if (currentSubjectId == null)
-        throw "No active Lab session found at this time.";
+      final deviceInfo = await getDeviceInfo();
+      final String deviceId = deviceInfo['id'] ?? "unknown";
+      final String deviceName = deviceInfo['model'] ?? "unknown";
 
       _updateStatus("Verifying Location...", Colors.blue);
       final studentPosition = await _determinePosition();
 
-      final labDoc = await firestore.collection('labs').doc(targetLabId).get();
-      if (!labDoc.exists) throw "Invalid Lab QR!";
+      _updateStatus("Syncing with Server...", Colors.orange);
 
-      final labData = labDoc.data()!;
-      double distanceInMeters = Geolocator.distanceBetween(
-        studentPosition.latitude,
-        studentPosition.longitude,
-        labData['latitude'],
-        labData['longitude'],
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('auth_token');
+
+      final response = await http.post(
+        Uri.parse("${ApiConfig.baseUrl}/attendance/mark"),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'qr_data': qrData,
+          'latitude': studentPosition.latitude,
+          'longitude': studentPosition.longitude,
+          'device_id': deviceId,
+          'device_name': deviceName,
+        }),
       );
 
-      if (distanceInMeters > 50.0) {
-        throw "Out of Range! You must be inside the Lab to mark attendance.";
+      final responseData = jsonDecode(response.body);
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        ref.invalidate(attendanceProvider);
+        ref.read(dashboardControllerProvider.notifier).initData();
+        _showSuccessScreen();
+      } else {
+        throw responseData['message'] ?? "Failed to mark attendance.";
       }
-
-      _updateStatus("Marking Attendance...", Colors.orange);
-      await _markAttendanceInFirestore(
-        user.uid,
-        sessionId,
-        currentSubjectId!,
-        uniqueKey!,
-        studentPosition,
-      );
-
-      ref.invalidate(attendanceProvider);
-      ref.read(dashboardControllerProvider.notifier).initData();
-
-      _showSuccessScreen();
     } catch (e) {
-      _showFailureScreen(e.toString());
+      _showFailureScreen(e.toString().replaceAll("Exception: ", ""));
     }
   }
 
@@ -278,48 +206,12 @@ class _StudentScannerScreenState extends ConsumerState<StudentScannerScreen>
     }
 
     if (permission == LocationPermission.deniedForever) {
-      throw "Location permissions are permanently denied";
+      throw "Location permissions are permanently denied. Please enable from settings.";
     }
 
     return await Geolocator.getCurrentPosition(
       desiredAccuracy: LocationAccuracy.high,
     );
-  }
-
-  Future<void> _markAttendanceInFirestore(
-    String uid,
-    String sessionId,
-    String subjectId,
-    String uniqueKey,
-    Position position,
-  ) async {
-    final firestore = FirebaseFirestore.instance;
-
-    final today = DateTime.now();
-    final dateKey = "${today.year}-${today.month}-${today.day}";
-
-    final existingQuery = await firestore
-        .collection('attendance')
-        .where('uid', isEqualTo: uid)
-        .where('uniqueSessionKey', isEqualTo: uniqueKey)
-        .get();
-
-    if (existingQuery.docs.isNotEmpty) {
-      throw "Attendance already marked for this session!";
-    }
-
-    await firestore.collection('attendance').add({
-      'uid': uid,
-      'sessionId': sessionId,
-      'subjectId': subjectId,
-      'uniqueSessionKey': uniqueKey,
-      'timestamp': FieldValue.serverTimestamp(),
-      'dateKey': dateKey,
-      'status': 'Present',
-      'location': {'lat': position.latitude, 'lng': position.longitude},
-      'deviceInfo': 'Android/iOS',
-      'method': 'QR_SCAN',
-    });
   }
 
   void _updateStatus(String msg, Color color) {
@@ -374,7 +266,7 @@ class _StudentScannerScreenState extends ConsumerState<StudentScannerScreen>
               ),
               const SizedBox(height: 8),
               Text(
-                error.replaceAll("Exception: ", ""),
+                error,
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.grey[600]),
               ),
@@ -414,11 +306,10 @@ class _StudentScannerScreenState extends ConsumerState<StudentScannerScreen>
     }
   }
 
+  // UI Build methods remain unchanged
   @override
   Widget build(BuildContext context) {
-    if (_isSuccess) {
-      return _buildSuccessView();
-    }
+    if (_isSuccess) return _buildSuccessView();
 
     final size = MediaQuery.of(context).size;
     final scanSize = size.width * 0.7;
@@ -567,7 +458,6 @@ class _StudentScannerScreenState extends ConsumerState<StudentScannerScreen>
                       builder: (context, value, child) {
                         return Transform.scale(scale: value, child: child);
                       },
-                      onEnd: () {},
                       child: Container(
                         padding: const EdgeInsets.all(20),
                         decoration: BoxDecoration(
@@ -710,7 +600,6 @@ class ScannerOverlayPainter extends CustomPainter {
     final backgroundPaint = Paint()
       ..color = Colors.black.withOpacity(0.6)
       ..style = PaintingStyle.fill;
-
     canvas.drawPath(backgroundPath, backgroundPaint);
 
     final borderPaint = Paint()
@@ -718,24 +607,20 @@ class ScannerOverlayPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = borderWidth
       ..strokeCap = StrokeCap.round;
-
     final path = Path();
 
     path.moveTo(left, top + borderLength);
     path.lineTo(left, top + borderRadius);
     path.quadraticBezierTo(left, top, left + borderRadius, top);
     path.lineTo(left + borderLength, top);
-
     path.moveTo(right - borderLength, top);
     path.lineTo(right - borderRadius, top);
     path.quadraticBezierTo(right, top, right, top + borderRadius);
     path.lineTo(right, top + borderLength);
-
     path.moveTo(right, bottom - borderLength);
     path.lineTo(right, bottom - borderRadius);
     path.quadraticBezierTo(right, bottom, right - borderRadius, bottom);
     path.lineTo(right - borderLength, bottom);
-
     path.moveTo(left + borderLength, bottom);
     path.lineTo(left + borderRadius, bottom);
     path.quadraticBezierTo(left, bottom, left, bottom - borderRadius);

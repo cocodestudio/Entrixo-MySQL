@@ -1,9 +1,11 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../utils/custom_toast.dart';
 import '../../widgets/geometric_loader.dart';
+import '../utils/api_config.dart';
 
 class AddStudentScreen extends StatefulWidget {
   const AddStudentScreen({super.key});
@@ -13,12 +15,13 @@ class AddStudentScreen extends StatefulWidget {
 }
 
 class _AddStudentScreenState extends State<AddStudentScreen> {
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FirebaseAuth _auth = FirebaseAuth.instance;
   bool _isLoading = false;
+  bool _isLoadingCourses = true;
+  List<dynamic> _coursesList = [];
 
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _rollNoController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
 
   String? _selectedCourseId;
@@ -27,11 +30,51 @@ class _AddStudentScreenState extends State<AddStudentScreen> {
   int? _selectedSemester;
 
   @override
+  void initState() {
+    super.initState();
+    _fetchCourses();
+  }
+
+  @override
   void dispose() {
     _nameController.dispose();
     _rollNoController.dispose();
+    _emailController.dispose();
     _phoneController.dispose();
     super.dispose();
+  }
+
+  Future<String?> _getToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('auth_token');
+  }
+
+  Future<void> _fetchCourses() async {
+    try {
+      final token = await _getToken();
+      final response = await http.get(
+        Uri.parse(ApiConfig.courses),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        setState(() {
+          _coursesList = decoded['data'] ?? decoded;
+          _isLoadingCourses = false;
+        });
+      } else {
+        setState(() => _isLoadingCourses = false);
+        CustomToast.show(context, "Failed to load courses", isError: true);
+      }
+    } catch (e) {
+      setState(() => _isLoadingCourses = false);
+      CustomToast.show(context, "Network Error", isError: true);
+    }
   }
 
   Future<void> _registerStudent() async {
@@ -39,6 +82,7 @@ class _AddStudentScreenState extends State<AddStudentScreen> {
 
     if (_nameController.text.trim().isEmpty ||
         _rollNoController.text.trim().isEmpty ||
+        _emailController.text.trim().isEmpty ||
         _phoneController.text.trim().isEmpty ||
         _selectedCourseId == null ||
         _selectedSemester == null) {
@@ -50,10 +94,20 @@ class _AddStudentScreenState extends State<AddStudentScreen> {
       return;
     }
 
-    if (_phoneController.text.trim().length != 10) {
+    final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
+    if (!emailRegex.hasMatch(_emailController.text.trim())) {
       CustomToast.show(
         context,
-        "Please enter a valid 10-digit phone number",
+        "Please enter a valid email address",
+        isError: true,
+      );
+      return;
+    }
+
+    if (_phoneController.text.trim().length < 10) {
+      CustomToast.show(
+        context,
+        "Please enter a valid phone number",
         isError: true,
       );
       return;
@@ -62,66 +116,62 @@ class _AddStudentScreenState extends State<AddStudentScreen> {
     setState(() => _isLoading = true);
 
     try {
-      final String fullPhoneNumber = "+91${_phoneController.text.trim()}";
+      final token = await _getToken();
+      final response = await http.post(
+        Uri.parse(ApiConfig.register),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'name': _nameController.text.trim(),
+          'email': _emailController.text.trim().toLowerCase(),
+          'phone_number': _phoneController.text.trim(),
+          'roll_number': _rollNoController.text.trim().toUpperCase(),
+          'course_id': _selectedCourseId,
+          'course_name': _selectedCourseName,
+          'current_semester': _selectedSemester,
+        }),
+      );
 
-      final QuerySnapshot rollNoCheck = await _firestore
-          .collection('users')
-          .where(
-            'rollNumber',
-            isEqualTo: _rollNoController.text.trim().toUpperCase(),
-          )
-          .get();
+      final responseData = jsonDecode(response.body);
 
-      if (rollNoCheck.docs.isNotEmpty) {
-        throw "Student with this Roll Number already exists.";
-      }
-
-      final QuerySnapshot phoneCheck = await _firestore
-          .collection('users')
-          .where('phoneNumber', isEqualTo: fullPhoneNumber)
-          .get();
-
-      if (phoneCheck.docs.isNotEmpty) {
-        throw "Student with this Phone Number already exists.";
-      }
-
-      final docRef = _firestore.collection('users').doc();
-
-      await docRef.set({
-        'uid': docRef.id,
-        'name': _nameController.text.trim(),
-        'rollNumber': _rollNoController.text.trim().toUpperCase(),
-        'phoneNumber': fullPhoneNumber,
-        'courseId': _selectedCourseId,
-        'courseName': _selectedCourseName,
-        'currentSemester': _selectedSemester,
-        'role': 'student',
-        'isManualEntry': true,
-        'isSetupCompleted': true,
-        'registeredBy': _auth.currentUser?.uid,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-
-      if (mounted) {
-        CustomToast.show(context, "Student Added Successfully!");
-        _nameController.clear();
-        _rollNoController.clear();
-        _phoneController.clear();
-        setState(() {
-          _selectedCourseId = null;
-          _selectedCourseName = 'Select Course';
-          _selectedSemester = null;
-        });
-        Navigator.pop(context);
+      if (response.statusCode == 201 || response.statusCode == 200) {
+        if (mounted) {
+          CustomToast.show(context, "Student Added Successfully!");
+          _nameController.clear();
+          _rollNoController.clear();
+          _emailController.clear();
+          _phoneController.clear();
+          setState(() {
+            _selectedCourseId = null;
+            _selectedCourseName = 'Select Course';
+            _selectedSemester = null;
+          });
+          Navigator.pop(context);
+        }
+      } else {
+        String errorMessage = responseData['message'] ?? "Registration failed";
+        if (responseData['errors'] != null) {
+          final errors = responseData['errors'] as Map<String, dynamic>;
+          errorMessage = errors.values.first[0];
+        }
+        if (mounted) CustomToast.show(context, errorMessage, isError: true);
       }
     } catch (e) {
-      CustomToast.show(context, e.toString(), isError: true);
+      if (mounted) CustomToast.show(context, "Server Error: $e", isError: true);
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
   void _showCourseSelector() {
+    if (_isLoadingCourses) {
+      CustomToast.show(context, "Loading courses...", isError: false);
+      return;
+    }
+
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -161,53 +211,39 @@ class _AddStudentScreenState extends State<AddStudentScreen> {
               ),
               const SizedBox(height: 16),
               Expanded(
-                child: StreamBuilder<QuerySnapshot>(
-                  stream: _firestore
-                      .collection('courses')
-                      .orderBy('name')
-                      .snapshots(),
-                  builder: (context, snapshot) {
-                    if (snapshot.hasError) {
-                      return Center(child: Text("Error: ${snapshot.error}"));
-                    }
-                    if (!snapshot.hasData) {
-                      return const Center(
-                        child: GeometricLoader(size: 30, isDarkMode: false),
-                      );
-                    }
+                child: _coursesList.isEmpty
+                    ? const Center(child: Text("No courses found"))
+                    : ListView.separated(
+                        controller: controller,
+                        itemCount: _coursesList.length,
+                        separatorBuilder: (_, __) =>
+                            const Divider(height: 1, indent: 24),
+                        itemBuilder: (context, index) {
+                          final data = _coursesList[index];
+                          final isSelected =
+                              _selectedCourseId == data['id'].toString();
 
-                    final courses = snapshot.data!.docs;
-                    if (courses.isEmpty)
-                      return const Center(child: Text("No courses found"));
-
-                    return ListView.separated(
-                      controller: controller,
-                      itemCount: courses.length,
-                      separatorBuilder: (_, __) =>
-                          const Divider(height: 1, indent: 24),
-                      itemBuilder: (context, index) {
-                        final doc = courses[index];
-                        final data = doc.data() as Map<String, dynamic>;
-                        final isSelected = _selectedCourseId == doc.id;
-
-                        return _buildSelectionItem(
-                          title: data['name'],
-                          subtitle: "${data['durationYears']} Years Duration",
-                          isSelected: isSelected,
-                          onTap: () {
-                            setState(() {
-                              _selectedCourseId = doc.id;
-                              _selectedCourseName = data['name'];
-                              _currentCourseDuration = data['durationYears'];
-                              _selectedSemester = null;
-                            });
-                            Navigator.pop(context);
-                          },
-                        );
-                      },
-                    );
-                  },
-                ),
+                          return _buildSelectionItem(
+                            title: data['name'],
+                            subtitle:
+                                "${data['duration_years'] ?? 4} Years Duration",
+                            isSelected: isSelected,
+                            onTap: () {
+                              setState(() {
+                                _selectedCourseId = data['id'].toString();
+                                _selectedCourseName = data['name'];
+                                _currentCourseDuration =
+                                    int.tryParse(
+                                      data['duration_years'].toString(),
+                                    ) ??
+                                    4;
+                                _selectedSemester = null;
+                              });
+                              Navigator.pop(context);
+                            },
+                          );
+                        },
+                      ),
               ),
             ],
           ),
@@ -374,6 +410,7 @@ class _AddStudentScreenState extends State<AddStudentScreen> {
                   controller: _nameController,
                   label: "Full Name *",
                   icon: Icons.person_outline_rounded,
+                  textCapitalization: TextCapitalization.words,
                 ),
                 const SizedBox(height: 16),
                 _buildPremiumTextField(
@@ -384,15 +421,21 @@ class _AddStudentScreenState extends State<AddStudentScreen> {
                 ),
                 const SizedBox(height: 16),
                 _buildPremiumTextField(
+                  controller: _emailController,
+                  label: "Email Address *",
+                  icon: Icons.email_outlined,
+                  keyboardType: TextInputType.emailAddress,
+                ),
+                const SizedBox(height: 16),
+                _buildPremiumTextField(
                   controller: _phoneController,
                   label: "Phone Number *",
-                  icon: Icons.phone_rounded,
+                  icon: Icons.phone_outlined,
                   keyboardType: TextInputType.phone,
                   inputFormatters: [
                     FilteringTextInputFormatter.digitsOnly,
                     LengthLimitingTextInputFormatter(10),
                   ],
-                  prefixText: "+91 ",
                 ),
 
                 const SizedBox(height: 32),
@@ -563,7 +606,6 @@ class _AddStudentScreenState extends State<AddStudentScreen> {
     TextInputType keyboardType = TextInputType.text,
     TextCapitalization textCapitalization = TextCapitalization.none,
     List<TextInputFormatter>? inputFormatters,
-    String? prefixText,
   }) {
     return Container(
       decoration: BoxDecoration(
@@ -594,12 +636,6 @@ class _AddStudentScreenState extends State<AddStudentScreen> {
             fontWeight: FontWeight.w500,
           ),
           prefixIcon: Icon(icon, color: Theme.of(context).primaryColor),
-          prefixText: prefixText,
-          prefixStyle: const TextStyle(
-            fontWeight: FontWeight.w700,
-            color: Color(0xFF1A1A1A),
-            fontSize: 13,
-          ),
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(16),
             borderSide: BorderSide.none,

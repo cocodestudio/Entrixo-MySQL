@@ -1,5 +1,8 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import '../../utils/api_config.dart';
 import '../../utils/custom_toast.dart';
 import '../../widgets/geometric_loader.dart';
 
@@ -11,13 +14,20 @@ class AcademicEquipScreen extends StatefulWidget {
 }
 
 class _AcademicEquipScreenState extends State<AcademicEquipScreen> {
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   bool _isLoading = false;
+  bool _isFetchingLabs = true;
+  List<dynamic> _labsList = [];
 
   final TextEditingController _labNameController = TextEditingController();
   final TextEditingController _pcCountController = TextEditingController();
   final TextEditingController _latController = TextEditingController();
   final TextEditingController _longController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchLabs();
+  }
 
   @override
   void dispose() {
@@ -28,8 +38,48 @@ class _AcademicEquipScreenState extends State<AcademicEquipScreen> {
     super.dispose();
   }
 
+  Future<String?> _getToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('auth_token');
+  }
+
+  Future<void> _fetchLabs() async {
+    setState(() => _isFetchingLabs = true);
+    try {
+      final token = await _getToken();
+      final response = await http.get(
+        Uri.parse(ApiConfig.labs),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (mounted) {
+          setState(() {
+            _labsList = data['labs'] ?? [];
+          });
+        }
+      } else {
+        if (mounted) {
+          CustomToast.show(context, "Failed to load labs", isError: true);
+        }
+      }
+    } catch (e) {
+      if (mounted) CustomToast.show(context, "Network Error", isError: true);
+    } finally {
+      if (mounted) setState(() => _isFetchingLabs = false);
+    }
+  }
+
   Future<void> _addLab() async {
-    if (_labNameController.text.isEmpty || _pcCountController.text.isEmpty) {
+    FocusScope.of(context).unfocus();
+
+    if (_labNameController.text.trim().isEmpty ||
+        _pcCountController.text.trim().isEmpty) {
       CustomToast.show(
         context,
         "Please fill Lab Name and PC Count",
@@ -39,27 +89,71 @@ class _AcademicEquipScreenState extends State<AcademicEquipScreen> {
     }
 
     setState(() => _isLoading = true);
+
     try {
-      final docRef = _firestore.collection('labs').doc();
-      await docRef.set({
-        'labId': docRef.id,
-        'labName': _labNameController.text.trim(),
-        'totalPCs': int.parse(_pcCountController.text.trim()),
-        'latitude': double.tryParse(_latController.text.trim()) ?? 0.0,
-        'longitude': double.tryParse(_longController.text.trim()) ?? 0.0,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+      final token = await _getToken();
+      final response = await http.post(
+        Uri.parse(ApiConfig.labs),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'lab_name': _labNameController.text.trim(),
+          'total_pcs': int.tryParse(_pcCountController.text.trim()) ?? 0,
+          'latitude': double.tryParse(_latController.text.trim()) ?? 0.0,
+          'longitude': double.tryParse(_longController.text.trim()) ?? 0.0,
+        }),
+      );
 
-      _labNameController.clear();
-      _pcCountController.clear();
-      _latController.clear();
-      _longController.clear();
+      final data = jsonDecode(response.body);
 
-      if (mounted) CustomToast.show(context, "Lab added successfully!");
+      if (response.statusCode == 201 || response.statusCode == 200) {
+        _labNameController.clear();
+        _pcCountController.clear();
+        _latController.clear();
+        _longController.clear();
+
+        if (mounted) {
+          CustomToast.show(context, "Lab added successfully!");
+          _fetchLabs(); // Refresh the list
+        }
+      } else {
+        String errorMessage = data['message'] ?? "Failed to add lab";
+        if (mounted) CustomToast.show(context, errorMessage, isError: true);
+      }
     } catch (e) {
-      CustomToast.show(context, "Error: $e", isError: true);
+      if (mounted) CustomToast.show(context, "Server Error: $e", isError: true);
     } finally {
       if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _deleteLab(int id) async {
+    try {
+      final token = await _getToken();
+      final response = await http.delete(
+        Uri.parse('${ApiConfig.labs}/$id'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        if (mounted) {
+          CustomToast.show(context, "Lab deleted successfully!");
+          _fetchLabs(); // Refresh the list
+        }
+      } else {
+        if (mounted) {
+          CustomToast.show(context, "Failed to delete lab", isError: true);
+        }
+      }
+    } catch (e) {
+      if (mounted) CustomToast.show(context, "Network Error", isError: true);
     }
   }
 
@@ -84,7 +178,7 @@ class _AcademicEquipScreenState extends State<AcademicEquipScreen> {
             onPressed: () => Navigator.pop(context),
           ),
           title: Text(
-            "Lam Management",
+            "Lab Management",
             style: theme.textTheme.titleLarge?.copyWith(
               fontWeight: FontWeight.w800,
               fontSize: 16,
@@ -92,6 +186,7 @@ class _AcademicEquipScreenState extends State<AcademicEquipScreen> {
           ),
         ),
         body: SingleChildScrollView(
+          physics: const BouncingScrollPhysics(),
           padding: const EdgeInsets.all(24),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -118,7 +213,9 @@ class _AcademicEquipScreenState extends State<AcademicEquipScreen> {
                       controller: _latController,
                       label: "Latitude",
                       icon: Icons.location_on_outlined,
-                      keyboardType: TextInputType.number,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -127,7 +224,9 @@ class _AcademicEquipScreenState extends State<AcademicEquipScreen> {
                       controller: _longController,
                       label: "Longitude",
                       icon: Icons.location_on_outlined,
-                      keyboardType: TextInputType.number,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
                     ),
                   ),
                 ],
@@ -148,7 +247,7 @@ class _AcademicEquipScreenState extends State<AcademicEquipScreen> {
                   child: _isLoading
                       ? const GeometricLoader(size: 20, isDarkMode: false)
                       : const Text(
-                          "Create Lab & PC Entries",
+                          "Create Lab Entry",
                           style: TextStyle(
                             color: Colors.white,
                             fontWeight: FontWeight.bold,
@@ -199,7 +298,7 @@ class _AcademicEquipScreenState extends State<AcademicEquipScreen> {
         ],
       ),
       child: TextField(
-        style: TextStyle(fontSize: 16),
+        style: const TextStyle(fontSize: 16),
         controller: controller,
         keyboardType: keyboardType,
         decoration: InputDecoration(
@@ -218,54 +317,72 @@ class _AcademicEquipScreenState extends State<AcademicEquipScreen> {
   }
 
   Widget _buildLabsList() {
-    return StreamBuilder<QuerySnapshot>(
-      stream: _firestore
-          .collection('labs')
-          .orderBy('createdAt', descending: true)
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return const Center(
-            child: GeometricLoader(size: 30, isDarkMode: false),
-          );
-        }
-        final labs = snapshot.data!.docs;
+    if (_isFetchingLabs) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(20.0),
+          child: GeometricLoader(size: 30, isDarkMode: false),
+        ),
+      );
+    }
 
-        return ListView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: labs.length,
-          itemBuilder: (context, index) {
-            final data = labs[index].data() as Map<String, dynamic>;
-            return Container(
-              margin: const EdgeInsets.only(bottom: 12),
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
+    if (_labsList.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(20.0),
+          child: Text(
+            "No labs found.",
+            style: TextStyle(
+              color: Colors.grey[500],
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+      );
+    }
+
+    return ListView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: _labsList.length,
+      itemBuilder: (context, index) {
+        final data = _labsList[index];
+        final lat = double.tryParse(data['latitude'].toString()) ?? 0.0;
+        final lng = double.tryParse(data['longitude'].toString()) ?? 0.0;
+
+        return Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.02),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
               ),
-              child: ListTile(
-                leading: const Icon(Icons.lan_outlined, color: Colors.blue),
-                title: Text(
-                  data['labName'],
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-                subtitle: Text(
-                  "${data['totalPCs']} Computers | Loc: ${data['latitude'].toStringAsFixed(4)}, ${data['longitude'].toStringAsFixed(4)}",
-                ),
-                trailing: IconButton(
-                  icon: const Icon(
-                    Icons.delete_sweep_outlined,
-                    color: Colors.redAccent,
-                  ),
-                  onPressed: () => _firestore
-                      .collection('labs')
-                      .doc(labs[index].id)
-                      .delete(),
-                ),
+            ],
+          ),
+          child: ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.lan_outlined, color: Colors.blue),
+            title: Text(
+              data['lab_name'] ?? 'Unknown',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            subtitle: Text(
+              "${data['total_pcs']} Computers | Loc: ${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)}",
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            ),
+            trailing: IconButton(
+              icon: const Icon(
+                Icons.delete_sweep_outlined,
+                color: Colors.redAccent,
               ),
-            );
-          },
+              onPressed: () => _deleteLab(data['id']),
+            ),
+          ),
         );
       },
     );

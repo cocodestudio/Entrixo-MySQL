@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../home/dashboard_screen.dart';
-import '../screens/student_setup_screen.dart';
+import '../screens/forgot_password_screen.dart';
 import '../utils/custom_toast.dart';
 import '../utils/nav_utils.dart';
 import '../widgets/geometric_loader.dart';
@@ -18,14 +18,13 @@ class LoginScreen extends ConsumerStatefulWidget {
 
 class _LoginScreenState extends ConsumerState<LoginScreen>
     with TickerProviderStateMixin {
-  final PageController _pageController = PageController();
-  final TextEditingController _phoneController = TextEditingController();
-  final TextEditingController _otpController = TextEditingController();
-  final FocusNode _phoneFocusNode = FocusNode();
-  final FocusNode _otpFocusNode = FocusNode();
+  final TextEditingController _identifierController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+  final FocusNode _identifierFocusNode = FocusNode();
+  final FocusNode _passwordFocusNode = FocusNode();
 
   late AnimationController _animationController;
-  String _verificationId = "";
+  bool _isPasswordVisible = false;
 
   @override
   void initState() {
@@ -35,11 +34,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
       duration: const Duration(seconds: 12),
     )..repeat();
 
-    _phoneFocusNode.addListener(() {
+    _identifierFocusNode.addListener(() {
       if (mounted) setState(() {});
     });
 
-    _otpFocusNode.addListener(() {
+    _passwordFocusNode.addListener(() {
       if (mounted) setState(() {});
     });
   }
@@ -47,75 +46,50 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
   @override
   void dispose() {
     _animationController.dispose();
-    _pageController.dispose();
-    _phoneController.dispose();
-    _otpController.dispose();
-    _phoneFocusNode.dispose();
-    _otpFocusNode.dispose();
+    _identifierController.dispose();
+    _passwordController.dispose();
+    _identifierFocusNode.dispose();
+    _passwordFocusNode.dispose();
     super.dispose();
   }
 
-  void _onGetOtpPressed() {
+  void _onLoginPressed() {
     FocusScope.of(context).unfocus();
-    String phone = _phoneController.text.trim();
 
-    if (phone.isEmpty || phone.length != 10) {
+    final String identifier = _identifierController.text.trim();
+    final String password = _passwordController.text.trim();
+
+    if (identifier.isEmpty) {
       CustomToast.show(
         context,
-        "Please enter a valid 10-digit phone number",
+        "Please enter Email, Phone, or Roll Number",
         isError: true,
       );
       return;
     }
 
-    ref.read(authControllerProvider.notifier).sendOTP(context, phone, (verId) {
-      _verificationId = verId;
-      _pageController.animateToPage(
-        1,
-        duration: const Duration(milliseconds: 500),
-        curve: Curves.fastOutSlowIn,
-      );
-      Future.delayed(const Duration(milliseconds: 500), () {
-        if (mounted) FocusScope.of(context).requestFocus(_otpFocusNode);
-      });
-    });
-  }
-
-  void _onVerifyOtpPressed() {
-    FocusScope.of(context).unfocus();
-    String otp = _otpController.text.trim();
-
-    if (otp.isEmpty || otp.length != 6) {
+    if (password.isEmpty || password.length < 6) {
       CustomToast.show(
         context,
-        "Please enter a valid 6-digit OTP",
+        "Password must be at least 6 characters",
         isError: true,
       );
       return;
     }
 
-    ref.read(authControllerProvider.notifier).verifyAndLogin(
+    ref.read(authControllerProvider.notifier).login(
       context,
-      _verificationId,
-      otp,
-      "student",
-      (bool isSetupDone) {
-        if (isSetupDone) {
+      identifier,
+      password,
+      (String role) {
+        if (role.toLowerCase() == 'admin') {
+          NavUtils.pushReplacement(context, const DashboardScreen());
+        } else if (role.toLowerCase() == 'student') {
           NavUtils.pushReplacement(context, const DashboardScreen());
         } else {
-          NavUtils.pushReplacement(context, const StudentSetupScreen());
+          CustomToast.show(context, "Unauthorized role: $role", isError: true);
         }
       },
-    );
-  }
-
-  void _goBack() {
-    FocusScope.of(context).unfocus();
-    _otpController.clear();
-    _pageController.animateToPage(
-      0,
-      duration: const Duration(milliseconds: 500),
-      curve: Curves.fastOutSlowIn,
     );
   }
 
@@ -170,18 +144,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                     ),
                   ],
                 ),
-                child: PageView(
-                  controller: _pageController,
-                  physics: const NeverScrollableScrollPhysics(),
-                  children: [
-                    _buildPhoneSection(
-                      theme,
-                      size,
-                      isKeyboardVisible,
-                      isLoading,
-                    ),
-                    _buildOtpSection(theme, size, isKeyboardVisible, isLoading),
-                  ],
+                child: _buildLoginSection(
+                  theme,
+                  size,
+                  isKeyboardVisible,
+                  isLoading,
                 ),
               ),
             ),
@@ -191,7 +158,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
     );
   }
 
-  Widget _buildPhoneSection(
+  Widget _buildLoginSection(
     ThemeData theme,
     Size size,
     bool isKeyboardVisible,
@@ -204,7 +171,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Welcome Back',
+            'Secure Login',
             style: theme.textTheme.displayLarge?.copyWith(
               fontSize: 18,
               fontWeight: FontWeight.w700,
@@ -213,31 +180,32 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
           ),
           const SizedBox(height: 8),
           Text(
-            'Enter your phone number to securely access your portal.',
+            'Enter your credentials to securely access your portal.',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: const Color(0xFF666666),
               height: 1.5,
               fontSize: 13,
             ),
           ),
-          const SizedBox(height: 40),
+          const SizedBox(height: 25),
+
           AnimatedContainer(
             duration: const Duration(milliseconds: 300),
             curve: Curves.easeInOut,
-            height: 64,
+            height: 58,
             padding: const EdgeInsets.symmetric(horizontal: 20),
             decoration: BoxDecoration(
-              color: _phoneFocusNode.hasFocus
+              color: _identifierFocusNode.hasFocus
                   ? Colors.white
                   : const Color(0xFFF7F8FA),
               borderRadius: BorderRadius.circular(18),
               border: Border.all(
-                color: _phoneFocusNode.hasFocus
+                color: _identifierFocusNode.hasFocus
                     ? theme.primaryColor.withOpacity(0.6)
                     : const Color(0xFFE5E7EB),
-                width: _phoneFocusNode.hasFocus ? 2.0 : 1.5,
+                width: _identifierFocusNode.hasFocus ? 2.0 : 1.5,
               ),
-              boxShadow: _phoneFocusNode.hasFocus
+              boxShadow: _identifierFocusNode.hasFocus
                   ? [
                       BoxShadow(
                         color: theme.primaryColor.withOpacity(0.08),
@@ -255,29 +223,22 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
             ),
             child: Row(
               children: [
-                Text(
-                  '+91',
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                    color: _phoneFocusNode.hasFocus
-                        ? theme.primaryColor
-                        : const Color(0xFF1A1A1A),
-                  ),
+                Icon(
+                  Icons.person_outline_rounded,
+                  size: 20,
+                  color: _identifierFocusNode.hasFocus
+                      ? theme.primaryColor
+                      : const Color(0xFF1A1A1A),
                 ),
                 const SizedBox(width: 16),
                 Expanded(
                   child: TextField(
-                    controller: _phoneController,
-                    focusNode: _phoneFocusNode,
-                    keyboardType: TextInputType.phone,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.digitsOnly,
-                      LengthLimitingTextInputFormatter(10),
-                    ],
+                    controller: _identifierController,
+                    focusNode: _identifierFocusNode,
+                    keyboardType: TextInputType.text,
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w600,
-                      letterSpacing: 1.5,
+                      letterSpacing: 0.5,
                       fontSize: 14,
                       color: const Color(0xFF1A1A1A),
                     ),
@@ -287,7 +248,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                       focusedBorder: InputBorder.none,
                       errorBorder: InputBorder.none,
                       disabledBorder: InputBorder.none,
-                      hintText: 'Phone Number',
+                      hintText: 'Email, Phone or Roll Number',
                       hintStyle: theme.textTheme.bodyMedium?.copyWith(
                         color: const Color(0xFFAAAAAA),
                         letterSpacing: 0.5,
@@ -303,17 +264,154 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
               ],
             ),
           ),
-          const SizedBox(height: 40),
+
+          const SizedBox(height: 15),
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeInOut,
+            height: 58,
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            decoration: BoxDecoration(
+              color: _passwordFocusNode.hasFocus
+                  ? Colors.white
+                  : const Color(0xFFF7F8FA),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
+                color: _passwordFocusNode.hasFocus
+                    ? theme.primaryColor.withOpacity(0.6)
+                    : const Color(0xFFE5E7EB),
+                width: _passwordFocusNode.hasFocus ? 2.0 : 1.5,
+              ),
+              boxShadow: _passwordFocusNode.hasFocus
+                  ? [
+                      BoxShadow(
+                        color: theme.primaryColor.withOpacity(0.08),
+                        blurRadius: 16,
+                        offset: const Offset(0, 4),
+                      ),
+                    ]
+                  : [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.02),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.lock_outline_rounded,
+                  size: 20,
+                  color: _passwordFocusNode.hasFocus
+                      ? theme.primaryColor
+                      : const Color(0xFF1A1A1A),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: TextField(
+                    controller: _passwordController,
+                    focusNode: _passwordFocusNode,
+                    obscureText: !_isPasswordVisible,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 1.5,
+                      fontSize: 14,
+                      color: const Color(0xFF1A1A1A),
+                    ),
+                    decoration: InputDecoration(
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      errorBorder: InputBorder.none,
+                      disabledBorder: InputBorder.none,
+                      hintText: 'Password',
+                      hintStyle: theme.textTheme.bodyMedium?.copyWith(
+                        color: const Color(0xFFAAAAAA),
+                        letterSpacing: 0.5,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w400,
+                      ),
+                      filled: false,
+                      contentPadding: EdgeInsets.zero,
+                      isDense: true,
+                    ),
+                  ),
+                ),
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _isPasswordVisible = !_isPasswordVisible;
+                    });
+                  },
+                  child: Container(
+                    color: Colors.transparent,
+                    padding: const EdgeInsets.only(
+                      left: 8,
+                      right: 0,
+                      top: 8,
+                      bottom: 8,
+                    ),
+                    child: Icon(
+                      _isPasswordVisible
+                          ? Icons.visibility_rounded
+                          : Icons.visibility_off_rounded,
+                      color: const Color(0xFFAAAAAA),
+                      size: 20,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const ForgotPasswordScreen(),
+                  ),
+                );
+              },
+              style:
+                  TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 12,
+                    ),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    splashFactory: NoSplash.splashFactory,
+                    foregroundColor: theme.primaryColor,
+                  ).copyWith(
+                    overlayColor: WidgetStateProperty.all(Colors.transparent),
+                  ),
+              child: Text(
+                'Forgot Password?',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.primaryColor,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 10),
+
           SizedBox(
             width: double.infinity,
             height: 56,
             child: ElevatedButton(
-              onPressed: isLoading ? null : _onGetOtpPressed,
+              onPressed: isLoading ? null : _onLoginPressed,
               style: ElevatedButton.styleFrom(
                 backgroundColor: theme.colorScheme.secondary,
                 disabledBackgroundColor: theme.colorScheme.secondary
                     .withOpacity(0.6),
-                elevation: isLoading ? 0 : 4,
+                elevation: isLoading ? 0 : 2,
                 shadowColor: theme.colorScheme.secondary.withOpacity(0.4),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16),
@@ -322,209 +420,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
               child: isLoading
                   ? const GeometricLoader(size: 28, isDarkMode: false)
                   : Text(
-                      'Get OTP',
+                      'Login',
                       style: theme.textTheme.labelLarge?.copyWith(
                         fontSize: 14,
                         fontWeight: FontWeight.w700,
                         letterSpacing: 1.2,
+                        color: Colors.white,
                       ),
                     ),
-            ),
-          ),
-          SizedBox(height: isKeyboardVisible ? size.height * 0.4 : 20),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildOtpSection(
-    ThemeData theme,
-    Size size,
-    bool isKeyboardVisible,
-    bool isLoading,
-  ) {
-    return SingleChildScrollView(
-      physics: const BouncingScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(32, 40, 32, 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              GestureDetector(
-                onTap: _goBack,
-                child: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF7F8FA),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Icon(
-                    Icons.arrow_back_ios_new_rounded,
-                    size: 16,
-                    color: theme.primaryColor,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 16),
-              Text(
-                'Verify OTP',
-                style: theme.textTheme.displayLarge?.copyWith(
-                  fontSize: 18,
-                  color: const Color(0xFF1A1A1A),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          RichText(
-            text: TextSpan(
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: const Color(0xFF666666),
-                height: 1.5,
-                fontSize: 13,
-              ),
-              children: [
-                const TextSpan(text: 'Enter the 6-digit code sent to '),
-                TextSpan(
-                  text: '+91 ${_phoneController.text}',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFF1A1A1A),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 40),
-          SizedBox(
-            height: 64,
-            child: Stack(
-              children: [
-                Opacity(
-                  opacity: 0.0,
-                  child: TextField(
-                    controller: _otpController,
-                    focusNode: _otpFocusNode,
-                    keyboardType: TextInputType.number,
-                    autofillHints: const [AutofillHints.oneTimeCode],
-                    inputFormatters: [
-                      FilteringTextInputFormatter.digitsOnly,
-                      LengthLimitingTextInputFormatter(6),
-                    ],
-                    onChanged: (value) {
-                      setState(() {});
-                      if (value.length == 6) {
-                        FocusScope.of(context).unfocus();
-                      }
-                    },
-                  ),
-                ),
-                IgnorePointer(
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: List.generate(6, (index) {
-                      String char = '';
-                      if (_otpController.text.length > index) {
-                        char = _otpController.text[index];
-                      }
-                      bool isCurrent =
-                          _otpController.text.length == index &&
-                          _otpFocusNode.hasFocus;
-                      bool isFilled = char.isNotEmpty;
-
-                      return AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        width: (size.width - 64 - 50) / 6,
-                        height: 60,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: isCurrent || isFilled
-                              ? Colors.white
-                              : const Color(0xFFF7F8FA),
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(
-                            color: isCurrent
-                                ? theme.primaryColor
-                                : isFilled
-                                ? theme.primaryColor.withOpacity(0.3)
-                                : Colors.transparent,
-                            width: 1.5,
-                          ),
-                          boxShadow: isCurrent || isFilled
-                              ? [
-                                  BoxShadow(
-                                    color: theme.primaryColor.withOpacity(0.05),
-                                    blurRadius: 10,
-                                    offset: const Offset(0, 4),
-                                  ),
-                                ]
-                              : [],
-                        ),
-                        child: Text(
-                          char,
-                          style: theme.textTheme.titleLarge?.copyWith(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                            color: theme.primaryColor,
-                          ),
-                        ),
-                      );
-                    }),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 40),
-          SizedBox(
-            width: double.infinity,
-            height: 56,
-            child: ElevatedButton(
-              onPressed: isLoading ? null : _onVerifyOtpPressed,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: theme.colorScheme.secondary,
-                elevation: isLoading ? 0 : 4,
-                shadowColor: theme.colorScheme.secondary.withOpacity(0.4),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-              ),
-              child: isLoading
-                  ? const GeometricLoader(size: 28, isDarkMode: false)
-                  : Text(
-                      'Verify & Proceed',
-                      style: theme.textTheme.labelLarge?.copyWith(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 1.2,
-                      ),
-                    ),
-            ),
-          ),
-          const SizedBox(height: 24),
-          Center(
-            child: TextButton(
-              onPressed: () {},
-              style: TextButton.styleFrom(foregroundColor: theme.primaryColor),
-              child: RichText(
-                text: TextSpan(
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 13,
-                  ),
-                  children: [
-                    const TextSpan(text: "Didn't receive code? "),
-                    TextSpan(
-                      text: "Resend",
-                      style: TextStyle(
-                        color: theme.colorScheme.secondary,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
             ),
           ),
           SizedBox(height: isKeyboardVisible ? size.height * 0.4 : 20),

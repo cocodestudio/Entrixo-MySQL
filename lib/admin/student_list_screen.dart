@@ -1,5 +1,8 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import '../../utils/api_config.dart';
 import '../../utils/custom_toast.dart';
 import '../../widgets/geometric_loader.dart';
 
@@ -11,8 +14,6 @@ class StudentListScreen extends StatefulWidget {
 }
 
 class _StudentListScreenState extends State<StudentListScreen> {
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-
   String? _selectedCourseId;
   String _selectedCourseName = 'Select Course';
   int _currentCourseDuration = 0;
@@ -20,10 +21,83 @@ class _StudentListScreenState extends State<StudentListScreen> {
   String _searchQuery = "";
   final TextEditingController _searchController = TextEditingController();
 
+  List<dynamic> _coursesList = [];
+  List<dynamic> _studentsList = [];
+  bool _isLoadingCourses = false;
+  bool _isLoadingStudents = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchCourses();
+  }
+
   @override
   void dispose() {
     _searchController.dispose();
     super.dispose();
+  }
+
+  Future<String?> _getToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('auth_token');
+  }
+
+  // --- API CALLS ---
+
+  Future<void> _fetchCourses() async {
+    setState(() => _isLoadingCourses = true);
+    try {
+      final token = await _getToken();
+      final response = await http.get(
+        Uri.parse(ApiConfig.courses),
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (mounted) setState(() => _coursesList = data['data'] ?? []);
+      }
+    } catch (e) {
+      if (mounted)
+        CustomToast.show(context, "Failed to load courses", isError: true);
+    } finally {
+      if (mounted) setState(() => _isLoadingCourses = false);
+    }
+  }
+
+  Future<void> _fetchStudents() async {
+    if (_selectedCourseId == null || _selectedSemester == null) return;
+
+    setState(() => _isLoadingStudents = true);
+    try {
+      final token = await _getToken();
+      final uri = Uri.parse(
+        "${ApiConfig.students}?course_id=$_selectedCourseId&semester=$_selectedSemester",
+      );
+      final response = await http.get(
+        uri,
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (mounted) setState(() => _studentsList = data['data'] ?? []);
+      } else {
+        if (mounted)
+          CustomToast.show(context, "Failed to fetch students", isError: true);
+      }
+    } catch (e) {
+      if (mounted) CustomToast.show(context, "Network Error", isError: true);
+    } finally {
+      if (mounted) setState(() => _isLoadingStudents = false);
+    }
   }
 
   // --- SELECTION LOGIC (Reused for Filter & Edit) ---
@@ -70,60 +144,50 @@ class _StudentListScreenState extends State<StudentListScreen> {
               ),
               const SizedBox(height: 16),
               Expanded(
-                child: StreamBuilder<QuerySnapshot>(
-                  stream: _firestore
-                      .collection('courses')
-                      .orderBy('name')
-                      .snapshots(),
-                  builder: (context, snapshot) {
-                    if (!snapshot.hasData) {
-                      return const Center(
+                child: _isLoadingCourses
+                    ? const Center(
                         child: GeometricLoader(size: 30, isDarkMode: false),
-                      );
-                    }
-                    final courses = snapshot.data!.docs;
+                      )
+                    : ListView.separated(
+                        controller: controller,
+                        itemCount: _coursesList.length,
+                        separatorBuilder: (_, __) =>
+                            const Divider(height: 1, indent: 24),
+                        itemBuilder: (context, index) {
+                          final data = _coursesList[index];
+                          // Handling dynamic typing securely
+                          final String id = data['id'].toString();
+                          final String name = data['name'] ?? 'Unknown';
+                          final int duration =
+                              int.tryParse(data['duration_years'].toString()) ??
+                              4;
 
-                    return ListView.separated(
-                      controller: controller,
-                      itemCount: courses.length,
-                      separatorBuilder: (_, __) =>
-                          const Divider(height: 1, indent: 24),
-                      itemBuilder: (context, index) {
-                        final doc = courses[index];
-                        final data = doc.data() as Map<String, dynamic>;
-
-                        return ListTile(
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 24,
-                            vertical: 4,
-                          ),
-                          title: Text(
-                            data['name'],
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 14,
+                          return ListTile(
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 24,
+                              vertical: 4,
                             ),
-                          ),
-                          subtitle: Text(
-                            "${data['durationYears']} Years",
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Colors.grey[600],
+                            title: Text(
+                              name,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14,
+                              ),
                             ),
-                          ),
-                          onTap: () {
-                            onSelect(
-                              doc.id,
-                              data['name'],
-                              data['durationYears'],
-                            );
-                            Navigator.pop(context);
-                          },
-                        );
-                      },
-                    );
-                  },
-                ),
+                            subtitle: Text(
+                              "$duration Years",
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.grey[600],
+                              ),
+                            ),
+                            onTap: () {
+                              onSelect(id, name, duration);
+                              Navigator.pop(context);
+                            },
+                          );
+                        },
+                      ),
               ),
             ],
           ),
@@ -326,9 +390,27 @@ class _StudentListScreenState extends State<StudentListScreen> {
             onPressed: () async {
               Navigator.pop(context);
               try {
-                await _firestore.collection('users').doc(uid).delete();
-                if (mounted)
-                  CustomToast.show(context, "Student deleted successfully");
+                final token = await _getToken();
+                final response = await http.delete(
+                  Uri.parse("${ApiConfig.students}/$uid"),
+                  headers: {
+                    'Accept': 'application/json',
+                    'Authorization': 'Bearer $token',
+                  },
+                );
+
+                if (response.statusCode == 200) {
+                  if (mounted)
+                    CustomToast.show(context, "Student deleted successfully");
+                  _fetchStudents(); // Refresh List
+                } else {
+                  if (mounted)
+                    CustomToast.show(
+                      context,
+                      "Failed to delete student",
+                      isError: true,
+                    );
+                }
               } catch (e) {
                 if (mounted)
                   CustomToast.show(context, "Error: $e", isError: true);
@@ -346,16 +428,14 @@ class _StudentListScreenState extends State<StudentListScreen> {
 
   void _showEditSheet(Map<String, dynamic> data, String uid) {
     final nameCtrl = TextEditingController(text: data['name']);
-    final rollCtrl = TextEditingController(text: data['rollNumber']);
+    final rollCtrl = TextEditingController(text: data['roll_number']);
 
-    // Local state for editing course/sem
-    String editCourseId = data['courseId'];
-    String editCourseName = data['courseName'];
-    int editSemester = data['currentSemester'];
-    // We need duration to calculate max semesters for the selected course.
-    // Assuming 4 years (8 sem) as fallback if not available,
-    // or we fetch it. For better UX, we'll try to keep existing or default.
-    int editDuration = 4;
+    String editCourseId = data['course_id'].toString();
+    String editCourseName =
+        data['course_name'] ??
+        _selectedCourseName; // Fallback to current filter
+    int editSemester = int.tryParse(data['current_semester'].toString()) ?? 1;
+    int editDuration = _currentCourseDuration > 0 ? _currentCourseDuration : 4;
 
     showModalBottomSheet(
       context: context,
@@ -394,7 +474,6 @@ class _StudentListScreenState extends State<StudentListScreen> {
                   ),
                   const SizedBox(height: 24),
 
-                  // Name Field
                   TextField(
                     controller: nameCtrl,
                     style: const TextStyle(fontWeight: FontWeight.w600),
@@ -408,7 +487,6 @@ class _StudentListScreenState extends State<StudentListScreen> {
                   ),
                   const SizedBox(height: 16),
 
-                  // Roll No Field
                   TextField(
                     controller: rollCtrl,
                     style: const TextStyle(fontWeight: FontWeight.w600),
@@ -423,7 +501,6 @@ class _StudentListScreenState extends State<StudentListScreen> {
                   ),
                   const SizedBox(height: 16),
 
-                  // Course Selector
                   _buildEditSelector(
                     label: "Course",
                     value: editCourseName,
@@ -435,7 +512,7 @@ class _StudentListScreenState extends State<StudentListScreen> {
                             editCourseId = id;
                             editCourseName = name;
                             editDuration = duration;
-                            editSemester = 1; // Reset to 1 on course change
+                            editSemester = 1;
                           });
                         },
                       );
@@ -443,7 +520,6 @@ class _StudentListScreenState extends State<StudentListScreen> {
                   ),
                   const SizedBox(height: 16),
 
-                  // Semester Selector
                   _buildEditSelector(
                     label: "Semester",
                     value: "Semester $editSemester",
@@ -467,24 +543,43 @@ class _StudentListScreenState extends State<StudentListScreen> {
                     child: ElevatedButton(
                       onPressed: () async {
                         try {
-                          await _firestore.collection('users').doc(uid).update({
-                            'name': nameCtrl.text.trim(),
-                            'rollNumber': rollCtrl.text.trim().toUpperCase(),
-                            'courseId': editCourseId,
-                            'courseName': editCourseName,
-                            'currentSemester': editSemester,
-                            'updatedAt': FieldValue.serverTimestamp(),
-                          });
-                          if (mounted) {
-                            Navigator.pop(context);
-                            CustomToast.show(context, "Student Updated");
+                          final token = await _getToken();
+                          final response = await http.put(
+                            Uri.parse("${ApiConfig.students}/$uid"),
+                            headers: {
+                              'Content-Type': 'application/json',
+                              'Accept': 'application/json',
+                              'Authorization': 'Bearer $token',
+                            },
+                            body: jsonEncode({
+                              'name': nameCtrl.text.trim(),
+                              'roll_number': rollCtrl.text.trim().toUpperCase(),
+                              'course_id': editCourseId,
+                              'current_semester': editSemester,
+                            }),
+                          );
+
+                          if (response.statusCode == 200) {
+                            if (mounted) {
+                              Navigator.pop(context);
+                              CustomToast.show(context, "Student Updated");
+                              _fetchStudents(); // Refresh List
+                            }
+                          } else {
+                            if (mounted)
+                              CustomToast.show(
+                                context,
+                                "Update Failed",
+                                isError: true,
+                              );
                           }
                         } catch (e) {
-                          CustomToast.show(
-                            context,
-                            "Update Failed: $e",
-                            isError: true,
-                          );
+                          if (mounted)
+                            CustomToast.show(
+                              context,
+                              "Error: $e",
+                              isError: true,
+                            );
                         }
                       },
                       style: ElevatedButton.styleFrom(
@@ -622,6 +717,8 @@ class _StudentListScreenState extends State<StudentListScreen> {
                                   _selectedCourseName = name;
                                   _currentCourseDuration = duration;
                                   _selectedSemester = null;
+                                  _studentsList
+                                      .clear(); // Clear list on course change
                                 });
                               },
                             );
@@ -641,8 +738,10 @@ class _StudentListScreenState extends State<StudentListScreen> {
                               : () {
                                   _showSemesterSelector(
                                     duration: _currentCourseDuration,
-                                    onSelect: (sem) =>
-                                        setState(() => _selectedSemester = sem),
+                                    onSelect: (sem) {
+                                      setState(() => _selectedSemester = sem);
+                                      _fetchStudents(); // Auto-fetch when both are selected
+                                    },
                                   );
                                 },
                         ),
@@ -684,173 +783,147 @@ class _StudentListScreenState extends State<StudentListScreen> {
                       "To view the student list, please apply filters above.",
                       Icons.filter_alt_off_rounded,
                     )
-                  : StreamBuilder<QuerySnapshot>(
-                      stream: _firestore
-                          .collection('users')
-                          .where('role', isEqualTo: 'student')
-                          .where('courseId', isEqualTo: _selectedCourseId)
-                          .where(
-                            'currentSemester',
-                            isEqualTo: _selectedSemester,
-                          )
-                          .snapshots(),
-                      builder: (context, snapshot) {
-                        if (snapshot.connectionState ==
-                            ConnectionState.waiting) {
-                          return Center(
-                            child: GeometricLoader(size: 40, isDarkMode: false),
-                          );
-                        }
-                        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                          return _buildEmptyState(
-                            "No Students Found",
-                            "No students registered in this class yet.",
-                            Icons.people_outline_rounded,
-                          );
-                        }
-
-                        final allStudents = snapshot.data!.docs;
-                        final filteredList = allStudents.where((doc) {
-                          final data = doc.data() as Map<String, dynamic>;
-                          final roll = (data['rollNumber'] ?? "")
-                              .toString()
-                              .toLowerCase();
-                          final phone = (data['phoneNumber'] ?? "")
-                              .toString()
-                              .toLowerCase();
-                          return _searchQuery.isEmpty ||
-                              roll.contains(_searchQuery) ||
-                              phone.contains(_searchQuery);
-                        }).toList();
-
-                        if (filteredList.isEmpty) {
-                          return _buildEmptyState(
-                            "No Match Found",
-                            "Try searching with a different roll number.",
-                            Icons.search_off_rounded,
-                          );
-                        }
-
-                        return ListView.builder(
-                          padding: const EdgeInsets.all(16),
-                          physics: const BouncingScrollPhysics(),
-                          itemCount: filteredList.length,
-                          itemBuilder: (context, index) {
-                            final doc = filteredList[index];
-                            final data = doc.data() as Map<String, dynamic>;
-                            final bool isManual = data['isManualEntry'] == true;
-                            final String initials = (data['name'] ?? "S")
-                                .toString()
-                                .substring(0, 1)
-                                .toUpperCase();
-
-                            return Container(
-                              margin: const EdgeInsets.only(bottom: 12),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(20),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.04),
-                                    blurRadius: 10,
-                                    offset: const Offset(0, 4),
-                                  ),
-                                ],
-                              ),
-                              child: ListTile(
-                                contentPadding: const EdgeInsets.all(16),
-                                leading: CircleAvatar(
-                                  radius: 24,
-                                  backgroundColor: isManual
-                                      ? Colors.orange.withOpacity(0.1)
-                                      : theme.primaryColor.withOpacity(0.1),
-                                  child: Text(
-                                    initials,
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      color: isManual
-                                          ? Colors.orange
-                                          : theme.primaryColor,
-                                      fontSize: 16,
-                                    ),
-                                  ),
-                                ),
-                                title: Row(
-                                  children: [
-                                    Flexible(
-                                      child: Text(
-                                        data['name'] ?? "Unknown",
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 14,
-                                          color: Color(0xFF1A1A1A),
-                                        ),
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 8,
-                                        vertical: 3,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: isManual
-                                            ? Colors.orange.withOpacity(0.1)
-                                            : Colors.green.withOpacity(0.1),
-                                        borderRadius: BorderRadius.circular(6),
-                                      ),
-                                      child: Text(
-                                        isManual ? "MANUAL" : "VERIFIED",
-                                        style: TextStyle(
-                                          fontSize: 9,
-                                          fontWeight: FontWeight.w800,
-                                          color: isManual
-                                              ? Colors.orange
-                                              : Colors.green,
-                                          letterSpacing: 0.5,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                subtitle: Padding(
-                                  padding: const EdgeInsets.only(top: 6),
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        Icons.badge_outlined,
-                                        size: 14,
-                                        color: Colors.grey[500],
-                                      ),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        data['rollNumber'] ?? "N/A",
-                                        style: TextStyle(
-                                          color: Colors.grey[700],
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                trailing: IconButton(
-                                  icon: const Icon(Icons.more_vert_rounded),
-                                  color: Colors.grey[400],
-                                  onPressed: () =>
-                                      _showStudentActionSheet(data, doc.id),
-                                ),
-                              ),
-                            );
-                          },
-                        );
-                      },
-                    ),
+                  : _isLoadingStudents
+                  ? const Center(
+                      child: GeometricLoader(size: 40, isDarkMode: false),
+                    )
+                  : _studentsList.isEmpty
+                  ? _buildEmptyState(
+                      "No Students Found",
+                      "No students registered in this class yet.",
+                      Icons.people_outline_rounded,
+                    )
+                  : _buildStudentsList(theme),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildStudentsList(ThemeData theme) {
+    final filteredList = _studentsList.where((data) {
+      final roll = (data['roll_number'] ?? "").toString().toLowerCase();
+      final phone = (data['phone_number'] ?? "").toString().toLowerCase();
+      return _searchQuery.isEmpty ||
+          roll.contains(_searchQuery) ||
+          phone.contains(_searchQuery);
+    }).toList();
+
+    if (filteredList.isEmpty) {
+      return _buildEmptyState(
+        "No Match Found",
+        "Try searching with a different roll number.",
+        Icons.search_off_rounded,
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      physics: const BouncingScrollPhysics(),
+      itemCount: filteredList.length,
+      itemBuilder: (context, index) {
+        final data = filteredList[index];
+        final String uid = data['id'].toString();
+        // Fallback for boolean conversions
+        final bool isManual =
+            data['is_manual_entry'] == true || data['is_manual_entry'] == 1;
+        final String initials = (data['name'] ?? "S")
+            .toString()
+            .substring(0, 1)
+            .toUpperCase();
+
+        return Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.04),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: ListTile(
+            contentPadding: const EdgeInsets.all(16),
+            leading: CircleAvatar(
+              radius: 24,
+              backgroundColor: isManual
+                  ? Colors.orange.withOpacity(0.1)
+                  : theme.primaryColor.withOpacity(0.1),
+              child: Text(
+                initials,
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: isManual ? Colors.orange : theme.primaryColor,
+                  fontSize: 16,
+                ),
+              ),
+            ),
+            title: Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    data['name'] ?? "Unknown",
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                      color: Color(0xFF1A1A1A),
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: isManual
+                        ? Colors.green.withOpacity(0.1)
+                        : Colors.green.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    isManual ? "VERIFIED" : "VERIFIED",
+                    style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w800,
+                      color: isManual ? Colors.green : Colors.green,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            subtitle: Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Row(
+                children: [
+                  Icon(Icons.badge_outlined, size: 14, color: Colors.grey[500]),
+                  const SizedBox(width: 4),
+                  Text(
+                    data['roll_number'] ?? "N/A",
+                    style: TextStyle(
+                      color: Colors.grey[700],
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            trailing: IconButton(
+              icon: const Icon(Icons.more_vert_rounded),
+              color: Colors.grey[400],
+              onPressed: () => _showStudentActionSheet(data, uid),
+            ),
+          ),
+        );
+      },
     );
   }
 
