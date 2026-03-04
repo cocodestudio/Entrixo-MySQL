@@ -1,5 +1,6 @@
 class ApiConfig {
-  static const String baseUrl = "http://192.168.0.108:8080/api";
+  // static const String baseUrl = "http://192.168.0.108:8080/api";
+  static const String baseUrl = "https://void-him-grammar-parts.trycloudflare.com/api";
   static const String login = "$baseUrl/login";
   static const String register = "$baseUrl/register";
   static const String registerAdmin = "$baseUrl/register-admin";

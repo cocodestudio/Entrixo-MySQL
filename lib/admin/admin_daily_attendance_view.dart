@@ -766,6 +766,25 @@ class _StudentReportCard extends StatelessWidget {
                         ),
                       ],
                     ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _detailItem(
+                            Icons.computer_rounded,
+                            "Lab No",
+                            student.details!['lab_no']?.toString() ?? 'N/A',
+                          ),
+                        ),
+                        Expanded(
+                          child: _detailItem(
+                            Icons.desktop_windows_rounded,
+                            "PC No",
+                            student.details!['pc_no']?.toString() ?? 'N/A',
+                          ),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
               )
