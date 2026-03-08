@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/api_config.dart';
 import '../utils/custom_toast.dart';
 import '../widgets/geometric_loader.dart';
+import 'add_lab_Screen.dart';
 
 class AcademicSetupScreen extends StatefulWidget {
   const AcademicSetupScreen({super.key});
@@ -45,28 +46,31 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
 
   Future<void> _loadInitialData() async {
     setState(() => _isFetchingInitial = true);
-    await Future.wait([
-      _fetchSessions(),
-      _fetchCourses(),
-    ]);
+    await Future.wait([_fetchSessions(), _fetchCourses()]);
 
     if (_sessionsList.isNotEmpty) {
       try {
-        final activeSession = _sessionsList.firstWhere((s) => s['status'] == 'Active');
+        final activeSession = _sessionsList.firstWhere(
+          (s) => s['status'] == 'Active',
+        );
         _activeSessionId = activeSession['id'].toString();
         _viewingSessionId = _activeSessionId;
-        _viewingSessionName = activeSession['session_name'] ?? activeSession['sessionName'];
+        _viewingSessionName =
+            activeSession['session_name'] ?? activeSession['sessionName'];
       } catch (e) {
         _activeSessionId = null;
         _viewingSessionId = _sessionsList.first['id'].toString();
-        _viewingSessionName = _sessionsList.first['session_name'] ?? _sessionsList.first['sessionName'];
+        _viewingSessionName =
+            _sessionsList.first['session_name'] ??
+            _sessionsList.first['sessionName'];
       }
     }
 
     if (_coursesList.isNotEmpty && _selectedCourseId == null) {
       _selectedCourseId = _coursesList.first['id'].toString();
       _selectedCourseName = _coursesList.first['name'];
-      _selectedCourseDuration = int.tryParse(_coursesList.first['duration_years'].toString()) ?? 4;
+      _selectedCourseDuration =
+          int.tryParse(_coursesList.first['duration_years'].toString()) ?? 4;
       _selectedSemester = 1;
     }
 
@@ -82,7 +86,10 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
       if (token == null) return;
       final response = await http.get(
         Uri.parse('${ApiConfig.baseUrl}/sessions'),
-        headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Accept': 'application/json',
+        },
       );
       if (response.statusCode == 200) {
         _sessionsList = json.decode(response.body)['data'];
@@ -98,7 +105,10 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
       if (token == null) return;
       final response = await http.get(
         Uri.parse(ApiConfig.courses),
-        headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Accept': 'application/json',
+        },
       );
       if (response.statusCode == 200) {
         _coursesList = json.decode(response.body)['data'];
@@ -122,7 +132,10 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
 
       final response = await http.get(
         uri,
-        headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Accept': 'application/json',
+        },
       );
 
       if (response.statusCode == 200) {
@@ -182,26 +195,29 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
     }
   }
 
-  Future<void> _addSubject(
-      String name,
-      String code,
-      List<Map<String, dynamic>> schedule,
-      ) async {
-    if (name.trim().isEmpty || code.trim().isEmpty) {
+  Future<bool> _addSubject(
+    String name,
+    String code,
+    String facultyName,
+    List<Map<String, dynamic>> schedule,
+  ) async {
+    if (name.trim().isEmpty ||
+        code.trim().isEmpty ||
+        facultyName.trim().isEmpty) {
       _showSnack("Please fill all fields", isError: true);
-      return;
+      return false;
     }
     if (_selectedCourseId == null) {
       _showSnack("No course selected", isError: true);
-      return;
+      return false;
     }
     if (_activeSessionId == null) {
       _showSnack("No Active Session Found!", isError: true);
-      return;
+      return false;
     }
     if (schedule.isEmpty) {
       _showSnack("Please generate a schedule first", isError: true);
-      return;
+      return false;
     }
 
     try {
@@ -216,6 +232,7 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
         body: json.encode({
           'name': name.trim(),
           'code': code.trim().toUpperCase(),
+          'faculty_name': facultyName.trim(),
           'course_id': _selectedCourseId,
           'semester': _selectedSemester,
           'session_id': _activeSessionId,
@@ -226,16 +243,17 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
       if (response.statusCode == 201) {
         await _fetchSubjects();
         if (mounted) {
-          Navigator.pop(context);
           _showSnack("Lab & Schedule added successfully!");
         }
+        return true;
       } else {
         final error = json.decode(response.body);
         _showSnack(error['message'] ?? "Error adding subject", isError: true);
-        throw Exception(error['message']);
+        return false;
       }
     } catch (e) {
-      rethrow;
+      _showSnack("Network Error", isError: true);
+      return false;
     }
   }
 
@@ -245,7 +263,10 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
       final token = await _getToken();
       final response = await http.delete(
         Uri.parse('${ApiConfig.subjects}/$subjectId'),
-        headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Accept': 'application/json',
+        },
       );
 
       if (response.statusCode == 200) {
@@ -343,9 +364,19 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                   separatorBuilder: (ctx, i) => const Divider(height: 1),
                   itemBuilder: (context, index) {
                     final item = schedule[index];
-                    final DateTime date = DateTime.parse(item['date'].toString());
+                    final DateTime date = DateTime.parse(
+                      item['date'].toString(),
+                    );
                     final dateStr = "${date.day}/${date.month}/${date.year}";
-                    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+                    const days = [
+                      'Mon',
+                      'Tue',
+                      'Wed',
+                      'Thu',
+                      'Fri',
+                      'Sat',
+                      'Sun',
+                    ];
                     final dayName = days[date.weekday - 1];
 
                     return Padding(
@@ -440,7 +471,9 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 24),
               child: Text(
                 "Select Academic Session",
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
               ),
             ),
             const SizedBox(height: 16),
@@ -458,18 +491,26 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                     onTap: () {
                       setState(() {
                         _viewingSessionId = id;
-                        _viewingSessionName = data['session_name'] ?? data['sessionName'];
+                        _viewingSessionName =
+                            data['session_name'] ?? data['sessionName'];
                       });
                       _fetchSubjects();
                       Navigator.pop(context);
                     },
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                      color: isSelected ? Theme.of(context).primaryColor.withOpacity(0.05) : null,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 16,
+                      ),
+                      color: isSelected
+                          ? Theme.of(context).primaryColor.withOpacity(0.05)
+                          : null,
                       child: Row(
                         children: [
                           Icon(
-                            isActive ? Icons.verified_rounded : Icons.history_rounded,
+                            isActive
+                                ? Icons.verified_rounded
+                                : Icons.history_rounded,
                             color: isActive ? Colors.green : Colors.grey,
                             size: 20,
                           ),
@@ -478,13 +519,20 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                             child: Text(
                               data['session_name'] ?? data['sessionName'],
                               style: TextStyle(
-                                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                color: isSelected ? Theme.of(context).primaryColor : Colors.black87,
+                                fontWeight: isSelected
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
+                                color: isSelected
+                                    ? Theme.of(context).primaryColor
+                                    : Colors.black87,
                               ),
                             ),
                           ),
                           if (isSelected)
-                            Icon(Icons.check_circle_rounded, color: Theme.of(context).primaryColor),
+                            Icon(
+                              Icons.check_circle_rounded,
+                              color: Theme.of(context).primaryColor,
+                            ),
                         ],
                       ),
                     ),
@@ -552,6 +600,7 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                 decoration: InputDecoration(
                   labelText: "Course Name",
                   hintText: "e.g. B.Tech CS",
+                  labelStyle: const TextStyle(fontSize: 13),
                   prefixIcon: const Icon(Icons.school_outlined),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(16),
@@ -584,17 +633,23 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                         duration: const Duration(milliseconds: 200),
                         padding: const EdgeInsets.symmetric(horizontal: 20),
                         decoration: BoxDecoration(
-                          color: isSelected ? Theme.of(context).primaryColor : Colors.white,
+                          color: isSelected
+                              ? Theme.of(context).primaryColor
+                              : Colors.white,
                           borderRadius: BorderRadius.circular(14),
                           border: Border.all(
-                            color: isSelected ? Colors.transparent : Colors.grey.withOpacity(0.3),
+                            color: isSelected
+                                ? Colors.transparent
+                                : Colors.grey.withOpacity(0.3),
                           ),
                         ),
                         child: Center(
                           child: Text(
                             "$years Years",
                             style: TextStyle(
-                              color: isSelected ? Colors.white : Colors.grey[800],
+                              color: isSelected
+                                  ? Colors.white
+                                  : Colors.grey[800],
                               fontWeight: FontWeight.w700,
                             ),
                           ),
@@ -609,7 +664,9 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                 width: double.infinity,
                 height: 56,
                 child: ElevatedButton(
-                  onPressed: _isLoading ? null : () => _addCourse(nameController.text, selectedYears),
+                  onPressed: _isLoading
+                      ? null
+                      : () => _addCourse(nameController.text, selectedYears),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Theme.of(context).primaryColor,
                     shape: RoundedRectangleBorder(
@@ -619,412 +676,17 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                   child: _isLoading
                       ? GeometricLoader(size: 24, isDarkMode: isDarkMode)
                       : const Text(
-                    "Create Course",
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                    ),
-                  ),
+                          "Create Course",
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
                 ),
               ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-
-  void _showAddSubjectSheet() {
-    if (_selectedCourseId == null) {
-      _showSnack("Please select a course first", isError: true);
-      return;
-    }
-
-    final TextEditingController nameController = TextEditingController();
-    final TextEditingController codeController = TextEditingController();
-    final theme = Theme.of(context);
-    final isDarkMode = theme.brightness == Brightness.dark;
-
-    DateTime? startDate;
-    DateTime? endDate;
-    TimeOfDay? startTime;
-    TimeOfDay? endTime;
-    List<int> selectedWeekdays = [];
-    List<Map<String, dynamic>> generatedSchedule = [];
-
-    bool isGenerating = false;
-    bool isSaving = false;
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setSheetState) {
-          Future<void> generateSchedule() async {
-            if (startDate == null || endDate == null || startTime == null || endTime == null || selectedWeekdays.isEmpty) {
-              CustomToast.show(context, "Please select dates, time & weekdays", isError: true);
-              return;
-            }
-
-            if (endDate!.isBefore(startDate!)) {
-              CustomToast.show(context, "End date cannot be before start date", isError: true);
-              return;
-            }
-
-            setSheetState(() => isGenerating = true);
-            await Future.delayed(const Duration(milliseconds: 800));
-
-            List<Map<String, dynamic>> tempSchedule = [];
-            DateTime current = startDate!;
-
-            while (current.isBefore(endDate!) || current.isAtSameMomentAs(endDate!)) {
-              if (selectedWeekdays.contains(current.weekday)) {
-                tempSchedule.add({
-                  'date': current.toIso8601String(),
-                  'startTime': "${startTime!.hour.toString().padLeft(2, '0')}:${startTime!.minute.toString().padLeft(2, '0')}",
-                  'endTime': "${endTime!.hour.toString().padLeft(2, '0')}:${endTime!.minute.toString().padLeft(2, '0')}",
-                });
-              }
-              current = current.add(const Duration(days: 1));
-            }
-
-            setSheetState(() {
-              generatedSchedule = tempSchedule;
-              isGenerating = false;
-            });
-
-            if (context.mounted) {
-              CustomToast.show(context, "Generated ${tempSchedule.length} sessions!");
-            }
-          }
-
-          return Container(
-            padding: EdgeInsets.only(
-              bottom: MediaQuery.of(context).viewInsets.bottom + 24,
-              top: 32,
-              left: 24,
-              right: 24,
-            ),
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.only(
-                topLeft: Radius.circular(32),
-                topRight: Radius.circular(32),
-              ),
-            ),
-            height: MediaQuery.of(context).size.height * 0.9,
-            child: Column(
-              children: [
-                Center(
-                  child: Container(
-                    width: 40,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: Colors.grey[300],
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 24),
-                const Text(
-                  "Add New Lab",
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w800,
-                    color: Color(0xFF1A1A1A),
-                  ),
-                ),
-                const SizedBox(height: 24),
-                Expanded(
-                  child: SingleChildScrollView(
-                    physics: const BouncingScrollPhysics(),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        TextField(
-                          controller: nameController,
-                          style: const TextStyle(fontWeight: FontWeight.w700),
-                          decoration: InputDecoration(
-                            labelText: "Lab Name",
-                            hintText: "e.g. Java Lab",
-                            prefixIcon: const Icon(Icons.class_outlined),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            filled: true,
-                            fillColor: const Color(0xFFF7F8FA),
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        TextField(
-                          controller: codeController,
-                          style: const TextStyle(fontWeight: FontWeight.w700),
-                          textCapitalization: TextCapitalization.characters,
-                          decoration: InputDecoration(
-                            labelText: "Subject Code",
-                            hintText: "e.g. CS-301",
-                            prefixIcon: const Icon(Icons.qr_code_rounded),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            filled: true,
-                            fillColor: const Color(0xFFF7F8FA),
-                          ),
-                        ),
-                        const SizedBox(height: 32),
-                        _buildSectionTitle("Schedule Generator"),
-                        const SizedBox(height: 16),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: _buildDatePickerBox(
-                                context,
-                                label: startDate == null ? "Start Date" : "${startDate!.day}/${startDate!.month}/${startDate!.year}",
-                                icon: Icons.calendar_today_rounded,
-                                isSelected: startDate != null,
-                                onTap: () async {
-                                  final picked = await showDatePicker(
-                                    context: context,
-                                    initialDate: DateTime.now(),
-                                    firstDate: DateTime.now(),
-                                    lastDate: DateTime.now().add(const Duration(days: 365)),
-                                  );
-                                  if (picked != null) setSheetState(() => startDate = picked);
-                                },
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: _buildDatePickerBox(
-                                context,
-                                label: endDate == null ? "End Date" : "${endDate!.day}/${endDate!.month}/${endDate!.year}",
-                                icon: Icons.event_rounded,
-                                isSelected: endDate != null,
-                                onTap: () async {
-                                  final picked = await showDatePicker(
-                                    context: context,
-                                    initialDate: startDate ?? DateTime.now(),
-                                    firstDate: DateTime.now(),
-                                    lastDate: DateTime.now().add(const Duration(days: 365)),
-                                  );
-                                  if (picked != null) setSheetState(() => endDate = picked);
-                                },
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: _buildDatePickerBox(
-                                context,
-                                label: startTime == null ? "Start Time" : "${startTime!.hour}:${startTime!.minute.toString().padLeft(2, '0')}",
-                                icon: Icons.schedule_rounded,
-                                isSelected: startTime != null,
-                                onTap: () async {
-                                  final picked = await showTimePicker(
-                                    context: context,
-                                    initialTime: const TimeOfDay(hour: 9, minute: 0),
-                                  );
-                                  if (picked != null) setSheetState(() => startTime = picked);
-                                },
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: _buildDatePickerBox(
-                                context,
-                                label: endTime == null ? "End Time" : "${endTime!.hour}:${endTime!.minute.toString().padLeft(2, '0')}",
-                                icon: Icons.schedule_rounded,
-                                isSelected: endTime != null,
-                                onTap: () async {
-                                  final picked = await showTimePicker(
-                                    context: context,
-                                    initialTime: startTime ?? const TimeOfDay(hour: 10, minute: 0),
-                                  );
-                                  if (picked != null) setSheetState(() => endTime = picked);
-                                },
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
-                        const Text(
-                          "Repeats On",
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.grey,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: List.generate(7, (index) {
-                            final dayIndex = index + 1;
-                            final isSelected = selectedWeekdays.contains(dayIndex);
-                            final days = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
-
-                            return GestureDetector(
-                              onTap: () {
-                                setSheetState(() {
-                                  isSelected ? selectedWeekdays.remove(dayIndex) : selectedWeekdays.add(dayIndex);
-                                });
-                              },
-                              child: Container(
-                                width: 40,
-                                height: 40,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: isSelected ? theme.primaryColor : Colors.grey[100],
-                                  border: Border.all(
-                                    color: isSelected ? Colors.transparent : Colors.grey[300]!,
-                                  ),
-                                ),
-                                child: Center(
-                                  child: Text(
-                                    days[index],
-                                    style: TextStyle(
-                                      color: isSelected ? Colors.white : Colors.grey[600],
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            );
-                          }),
-                        ),
-                        const SizedBox(height: 24),
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            onPressed: isGenerating ? null : generateSchedule,
-                            icon: isGenerating
-                                ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                                : Icon(Icons.auto_awesome_rounded, size: 18, color: theme.primaryColor),
-                            label: Text(
-                              isGenerating ? "Generating..." : "Generate Schedule",
-                              style: TextStyle(color: theme.primaryColor),
-                            ),
-                            style: OutlinedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              side: BorderSide(color: theme.primaryColor.withOpacity(0.5)),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                            ),
-                          ),
-                        ),
-                        if (generatedSchedule.isNotEmpty) ...[
-                          const SizedBox(height: 12),
-                          Center(
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                              decoration: BoxDecoration(
-                                color: Colors.green.withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: Text(
-                                "✅ ${generatedSchedule.length} Sessions Ready to Save",
-                                style: const TextStyle(
-                                  color: Colors.green,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                        const SizedBox(height: 20),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                SizedBox(
-                  width: double.infinity,
-                  height: 56,
-                  child: ElevatedButton(
-                    onPressed: (isSaving || isGenerating || generatedSchedule.isEmpty)
-                        ? null
-                        : () async {
-                      setSheetState(() => isSaving = true);
-                      try {
-                        await _addSubject(
-                          nameController.text,
-                          codeController.text,
-                          generatedSchedule,
-                        );
-                      } catch (e) {
-                        if (mounted) setSheetState(() => isSaving = false);
-                      }
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: theme.primaryColor,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                      elevation: 5,
-                    ),
-                    child: isSaving
-                        ? GeometricLoader(size: 24, isDarkMode: isDarkMode)
-                        : const Text(
-                      "Save Lab Configuration",
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 14,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildDatePickerBox(
-      BuildContext context, {
-        required String label,
-        required IconData icon,
-        required bool isSelected,
-        required VoidCallback onTap,
-      }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
-        decoration: BoxDecoration(
-          color: isSelected ? Theme.of(context).primaryColor.withOpacity(0.05) : Colors.grey[50],
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isSelected ? Theme.of(context).primaryColor : Colors.grey[300]!,
-          ),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              icon,
-              size: 18,
-              color: isSelected ? Theme.of(context).primaryColor : Colors.grey,
-            ),
-            const SizedBox(width: 8),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                color: isSelected ? Theme.of(context).primaryColor : Colors.black87,
-              ),
-            ),
-          ],
         ),
       ),
     );
@@ -1082,13 +744,14 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
   }
 
   Widget _buildSubjectTile(
-      Map<String, dynamic> data,
-      String id,
-      ThemeData theme,
-      bool isReadOnly,
-      ) {
+    Map<String, dynamic> data,
+    String id,
+    ThemeData theme,
+    bool isReadOnly,
+  ) {
     final name = data['name'] ?? 'Unknown';
     final code = data['code'] ?? '---';
+    final faculty = data['faculty_name'] ?? 'N/A';
     final schedule = data['schedule'] as List<dynamic>? ?? [];
 
     return Container(
@@ -1147,7 +810,10 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                 Row(
                   children: [
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.grey[100],
                         borderRadius: BorderRadius.circular(6),
@@ -1160,6 +826,18 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                           fontWeight: FontWeight.w700,
                           letterSpacing: 0.5,
                         ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        "Dr. $faculty",
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.grey[500],
+                          fontWeight: FontWeight.w600,
+                        ),
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
                   ],
@@ -1234,24 +912,35 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
               ),
             ),
           ),
-          floatingActionButton: (_activeSessionId != null && !isReadOnly)
+          floatingActionButton:
+              (_activeSessionId != null &&
+                  !isReadOnly &&
+                  _selectedCourseId != null)
               ? Padding(
-            padding: EdgeInsets.only(bottom: bottomPadding > 0 ? 0 : 20),
-            child: FloatingActionButton.extended(
-              onPressed: _showAddSubjectSheet,
-              backgroundColor: theme.primaryColor,
-              elevation: 2,
-              icon: const Icon(Icons.add_rounded, color: Colors.white),
-              label: const Text(
-                "Add Lab",
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 14,
-                ),
-              ),
-            ),
-          )
+                  padding: EdgeInsets.only(bottom: bottomPadding > 0 ? 0 : 20),
+                  child: FloatingActionButton.extended(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) =>
+                              AddLabScreen(onSave: _addSubject),
+                        ),
+                      );
+                    },
+                    backgroundColor: theme.primaryColor,
+                    elevation: 2,
+                    icon: const Icon(Icons.add_rounded, color: Colors.white),
+                    label: const Text(
+                      "Add Lab",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                )
               : null,
           body: SingleChildScrollView(
             physics: const BouncingScrollPhysics(),
@@ -1264,11 +953,16 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                   child: GestureDetector(
                     onTap: () => _showSessionSelector(),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: theme.primaryColor.withOpacity(0.3)),
+                        border: Border.all(
+                          color: theme.primaryColor.withOpacity(0.3),
+                        ),
                         boxShadow: [
                           BoxShadow(
                             color: Colors.black.withOpacity(0.02),
@@ -1328,58 +1022,76 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                   height: 60,
                   child: _coursesList.isEmpty
                       ? Center(
-                    child: Text(
-                      "No courses setup yet.",
-                      style: TextStyle(color: Colors.grey[500]),
-                    ),
-                  )
+                          child: Text(
+                            "No courses setup yet.",
+                            style: TextStyle(color: Colors.grey[500]),
+                          ),
+                        )
                       : ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
-                    clipBehavior: Clip.none,
-                    itemCount: _coursesList.length,
-                    separatorBuilder: (_, __) => const SizedBox(width: 12),
-                    itemBuilder: (context, index) {
-                      final doc = _coursesList[index];
-                      final isSelected = _selectedCourseId == doc['id'].toString();
-                      return GestureDetector(
-                        onTap: () {
-                          setState(() {
-                            _selectedCourseId = doc['id'].toString();
-                            _selectedCourseName = doc['name'];
-                            _selectedCourseDuration = int.tryParse(doc['duration_years'].toString()) ?? 4;
-                            _selectedSemester = 1;
-                          });
-                          _fetchSubjects();
-                        },
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                          decoration: BoxDecoration(
-                            color: isSelected ? theme.primaryColor : Colors.white,
-                            borderRadius: BorderRadius.circular(25),
-                            boxShadow: [
-                              BoxShadow(
-                                color: isSelected ? theme.primaryColor.withOpacity(0.3) : Colors.grey.withOpacity(0.05),
-                                blurRadius: 8,
-                                offset: const Offset(0, 4),
-                              ),
-                            ],
+                          scrollDirection: Axis.horizontal,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 24,
+                            vertical: 4,
                           ),
-                          child: Center(
-                            child: Text(
-                              doc['name'],
-                              style: TextStyle(
-                                color: isSelected ? Colors.white : Colors.grey[700],
-                                fontWeight: FontWeight.w700,
-                                fontSize: 12,
+                          clipBehavior: Clip.none,
+                          itemCount: _coursesList.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(width: 12),
+                          itemBuilder: (context, index) {
+                            final doc = _coursesList[index];
+                            final isSelected =
+                                _selectedCourseId == doc['id'].toString();
+                            return GestureDetector(
+                              onTap: () {
+                                setState(() {
+                                  _selectedCourseId = doc['id'].toString();
+                                  _selectedCourseName = doc['name'];
+                                  _selectedCourseDuration =
+                                      int.tryParse(
+                                        doc['duration_years'].toString(),
+                                      ) ??
+                                      4;
+                                  _selectedSemester = 1;
+                                });
+                                _fetchSubjects();
+                              },
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 200),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 24,
+                                  vertical: 12,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: isSelected
+                                      ? theme.primaryColor
+                                      : Colors.white,
+                                  borderRadius: BorderRadius.circular(25),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: isSelected
+                                          ? theme.primaryColor.withOpacity(0.3)
+                                          : Colors.grey.withOpacity(0.05),
+                                      blurRadius: 8,
+                                      offset: const Offset(0, 4),
+                                    ),
+                                  ],
+                                ),
+                                child: Center(
+                                  child: Text(
+                                    doc['name'],
+                                    style: TextStyle(
+                                      color: isSelected
+                                          ? Colors.white
+                                          : Colors.grey[700],
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ),
                               ),
-                            ),
-                          ),
+                            );
+                          },
                         ),
-                      );
-                    },
-                  ),
                 ),
                 const SizedBox(height: 32),
                 Padding(
@@ -1391,7 +1103,10 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                   height: 60,
                   child: ListView.separated(
                     scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 4,
+                    ),
                     clipBehavior: Clip.none,
                     itemCount: _selectedCourseDuration * 2,
                     separatorBuilder: (_, __) => const SizedBox(width: 12),
@@ -1408,13 +1123,21 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                           width: 50,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            color: isSelected ? theme.colorScheme.secondary : Colors.white,
+                            color: isSelected
+                                ? theme.colorScheme.secondary
+                                : Colors.white,
                             border: Border.all(
-                              color: isSelected ? Colors.transparent : Colors.grey.withOpacity(0.1),
+                              color: isSelected
+                                  ? Colors.transparent
+                                  : Colors.grey.withOpacity(0.1),
                             ),
                             boxShadow: [
                               BoxShadow(
-                                color: isSelected ? theme.colorScheme.secondary.withOpacity(0.4) : Colors.grey.withOpacity(0.05),
+                                color: isSelected
+                                    ? theme.colorScheme.secondary.withOpacity(
+                                        0.4,
+                                      )
+                                    : Colors.grey.withOpacity(0.05),
                                 blurRadius: 8,
                                 offset: const Offset(0, 4),
                               ),
@@ -1424,7 +1147,9 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                             child: Text(
                               "$sem",
                               style: TextStyle(
-                                color: isSelected ? Colors.white : Colors.grey[700],
+                                color: isSelected
+                                    ? Colors.white
+                                    : Colors.grey[700],
                                 fontWeight: FontWeight.w800,
                                 fontSize: 16,
                               ),
@@ -1439,34 +1164,47 @@ class _AcademicSetupScreenState extends State<AcademicSetupScreen> {
                 if (_selectedCourseId != null && _viewingSessionId != null)
                   _isFetchingSubjects
                       ? Padding(
-                    padding: const EdgeInsets.only(top: 50),
-                    child: Center(
-                      child: GeometricLoader(size: 30, isDarkMode: isDarkMode),
-                    ),
-                  )
+                          padding: const EdgeInsets.only(top: 50),
+                          child: Center(
+                            child: GeometricLoader(
+                              size: 30,
+                              isDarkMode: isDarkMode,
+                            ),
+                          ),
+                        )
                       : _subjectsList.isEmpty
                       ? (isReadOnly
-                      ? const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(40),
-                      child: Text(
-                        "No data in this past session.",
-                        style: TextStyle(color: Colors.grey),
-                      ),
-                    ),
-                  )
-                      : _buildEmptyState())
+                            ? const Center(
+                                child: Padding(
+                                  padding: EdgeInsets.all(40),
+                                  child: Text(
+                                    "No data in this past session.",
+                                    style: TextStyle(color: Colors.grey),
+                                  ),
+                                ),
+                              )
+                            : _buildEmptyState())
                       : ListView.builder(
-                    shrinkWrap: true,
-                    padding: EdgeInsets.fromLTRB(24, 0, 24, bottomPadding + 80),
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: _subjectsList.length,
-                    itemBuilder: (context, index) {
-                      final data = _subjectsList[index];
-                      final id = data['id'].toString();
-                      return _buildSubjectTile(data, id, theme, isReadOnly);
-                    },
-                  ),
+                          shrinkWrap: true,
+                          padding: EdgeInsets.fromLTRB(
+                            24,
+                            0,
+                            24,
+                            bottomPadding + 80,
+                          ),
+                          physics: const NeverScrollableScrollPhysics(),
+                          itemCount: _subjectsList.length,
+                          itemBuilder: (context, index) {
+                            final data = _subjectsList[index];
+                            final id = data['id'].toString();
+                            return _buildSubjectTile(
+                              data,
+                              id,
+                              theme,
+                              isReadOnly,
+                            );
+                          },
+                        ),
               ],
             ),
           ),

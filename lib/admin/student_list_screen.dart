@@ -43,8 +43,6 @@ class _StudentListScreenState extends State<StudentListScreen> {
     return prefs.getString('auth_token');
   }
 
-  // --- API CALLS ---
-
   Future<void> _fetchCourses() async {
     setState(() => _isLoadingCourses = true);
     try {
@@ -100,7 +98,66 @@ class _StudentListScreenState extends State<StudentListScreen> {
     }
   }
 
-  // --- SELECTION LOGIC (Reused for Filter & Edit) ---
+  Future<void> _resetDeviceBinding(String uid) async {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text("Reset Device Binding?"),
+        content: const Text(
+          "This will allow the student to login and mark attendance from a new device.",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              try {
+                final token = await _getToken();
+                final response = await http.post(
+                  Uri.parse("${ApiConfig.baseUrl}/students/reset-device"),
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                    'Authorization': 'Bearer $token',
+                  },
+                  body: jsonEncode({'student_id': uid}),
+                );
+
+                if (response.statusCode == 200) {
+                  if (mounted)
+                    CustomToast.show(
+                      context,
+                      "Device binding reset successfully",
+                    );
+                } else {
+                  if (mounted)
+                    CustomToast.show(
+                      context,
+                      "Failed to reset device",
+                      isError: true,
+                    );
+                }
+              } catch (e) {
+                if (mounted)
+                  CustomToast.show(context, "Error: $e", isError: true);
+              }
+            },
+            child: const Text(
+              "Reset",
+              style: TextStyle(
+                color: Colors.orange,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   void _showCourseSelector({
     required Function(String id, String name, int duration) onSelect,
@@ -155,7 +212,6 @@ class _StudentListScreenState extends State<StudentListScreen> {
                             const Divider(height: 1, indent: 24),
                         itemBuilder: (context, index) {
                           final data = _coursesList[index];
-                          // Handling dynamic typing securely
                           final String id = data['id'].toString();
                           final String name = data['name'] ?? 'Unknown';
                           final int duration =
@@ -267,8 +323,6 @@ class _StudentListScreenState extends State<StudentListScreen> {
     );
   }
 
-  // --- ACTIONS ---
-
   void _showStudentActionSheet(Map<String, dynamic> data, String uid) {
     showModalBottomSheet(
       context: context,
@@ -299,6 +353,16 @@ class _StudentListScreenState extends State<StudentListScreen> {
               onTap: () {
                 Navigator.pop(context);
                 _showEditSheet(data, uid);
+              },
+            ),
+            const SizedBox(height: 12),
+            _buildActionTile(
+              icon: Icons.phonelink_erase_rounded,
+              color: Colors.orange,
+              label: "Reset Device Binding",
+              onTap: () {
+                Navigator.pop(context);
+                _resetDeviceBinding(uid);
               },
             ),
             const SizedBox(height: 12),
@@ -402,7 +466,7 @@ class _StudentListScreenState extends State<StudentListScreen> {
                 if (response.statusCode == 200) {
                   if (mounted)
                     CustomToast.show(context, "Student deleted successfully");
-                  _fetchStudents(); // Refresh List
+                  _fetchStudents();
                 } else {
                   if (mounted)
                     CustomToast.show(
@@ -431,9 +495,7 @@ class _StudentListScreenState extends State<StudentListScreen> {
     final rollCtrl = TextEditingController(text: data['roll_number']);
 
     String editCourseId = data['course_id'].toString();
-    String editCourseName =
-        data['course_name'] ??
-        _selectedCourseName; // Fallback to current filter
+    String editCourseName = data['course_name'] ?? _selectedCourseName;
     int editSemester = int.tryParse(data['current_semester'].toString()) ?? 1;
     int editDuration = _currentCourseDuration > 0 ? _currentCourseDuration : 4;
 
@@ -473,7 +535,6 @@ class _StudentListScreenState extends State<StudentListScreen> {
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 24),
-
                   TextField(
                     controller: nameCtrl,
                     style: const TextStyle(fontWeight: FontWeight.w600),
@@ -486,7 +547,6 @@ class _StudentListScreenState extends State<StudentListScreen> {
                     ),
                   ),
                   const SizedBox(height: 16),
-
                   TextField(
                     controller: rollCtrl,
                     style: const TextStyle(fontWeight: FontWeight.w600),
@@ -500,7 +560,6 @@ class _StudentListScreenState extends State<StudentListScreen> {
                     ),
                   ),
                   const SizedBox(height: 16),
-
                   _buildEditSelector(
                     label: "Course",
                     value: editCourseName,
@@ -519,7 +578,6 @@ class _StudentListScreenState extends State<StudentListScreen> {
                     },
                   ),
                   const SizedBox(height: 16),
-
                   _buildEditSelector(
                     label: "Semester",
                     value: "Semester $editSemester",
@@ -535,7 +593,6 @@ class _StudentListScreenState extends State<StudentListScreen> {
                       );
                     },
                   ),
-
                   const SizedBox(height: 32),
                   SizedBox(
                     width: double.infinity,
@@ -563,7 +620,7 @@ class _StudentListScreenState extends State<StudentListScreen> {
                             if (mounted) {
                               Navigator.pop(context);
                               CustomToast.show(context, "Student Updated");
-                              _fetchStudents(); // Refresh List
+                              _fetchStudents();
                             }
                           } else {
                             if (mounted)
@@ -684,7 +741,6 @@ class _StudentListScreenState extends State<StudentListScreen> {
         ),
         body: Column(
           children: [
-            // --- FILTER & SEARCH HEADER ---
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
@@ -717,8 +773,7 @@ class _StudentListScreenState extends State<StudentListScreen> {
                                   _selectedCourseName = name;
                                   _currentCourseDuration = duration;
                                   _selectedSemester = null;
-                                  _studentsList
-                                      .clear(); // Clear list on course change
+                                  _studentsList.clear();
                                 });
                               },
                             );
@@ -740,7 +795,7 @@ class _StudentListScreenState extends State<StudentListScreen> {
                                     duration: _currentCourseDuration,
                                     onSelect: (sem) {
                                       setState(() => _selectedSemester = sem);
-                                      _fetchStudents(); // Auto-fetch when both are selected
+                                      _fetchStudents();
                                     },
                                   );
                                 },
@@ -774,8 +829,6 @@ class _StudentListScreenState extends State<StudentListScreen> {
                 ],
               ),
             ),
-
-            // --- LIST CONTENT ---
             Expanded(
               child: (_selectedCourseId == null || _selectedSemester == null)
                   ? _buildEmptyState(
@@ -825,7 +878,6 @@ class _StudentListScreenState extends State<StudentListScreen> {
       itemBuilder: (context, index) {
         final data = filteredList[index];
         final String uid = data['id'].toString();
-        // Fallback for boolean conversions
         final bool isManual =
             data['is_manual_entry'] == true || data['is_manual_entry'] == 1;
         final String initials = (data['name'] ?? "S")
@@ -853,14 +905,23 @@ class _StudentListScreenState extends State<StudentListScreen> {
               backgroundColor: isManual
                   ? Colors.orange.withOpacity(0.1)
                   : theme.primaryColor.withOpacity(0.1),
-              child: Text(
-                initials,
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: isManual ? Colors.orange : theme.primaryColor,
-                  fontSize: 16,
-                ),
-              ),
+              backgroundImage:
+                  (data['profile_pic'] != null &&
+                      data['profile_pic'].toString().isNotEmpty)
+                  ? NetworkImage(data['profile_pic'])
+                  : null,
+              child:
+                  (data['profile_pic'] == null ||
+                      data['profile_pic'].toString().isEmpty)
+                  ? Text(
+                      initials,
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: isManual ? Colors.orange : theme.primaryColor,
+                        fontSize: 16,
+                      ),
+                    )
+                  : null,
             ),
             title: Row(
               children: [
@@ -882,17 +943,15 @@ class _StudentListScreenState extends State<StudentListScreen> {
                     vertical: 3,
                   ),
                   decoration: BoxDecoration(
-                    color: isManual
-                        ? Colors.green.withOpacity(0.1)
-                        : Colors.green.withOpacity(0.1),
+                    color: Colors.green.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(6),
                   ),
-                  child: Text(
-                    isManual ? "VERIFIED" : "VERIFIED",
+                  child: const Text(
+                    "VERIFIED",
                     style: TextStyle(
                       fontSize: 9,
                       fontWeight: FontWeight.w800,
-                      color: isManual ? Colors.green : Colors.green,
+                      color: Colors.green,
                       letterSpacing: 0.5,
                     ),
                   ),

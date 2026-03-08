@@ -166,8 +166,7 @@ class _DailyHeadcountScreenState extends State<DailyHeadcountScreen> {
     }
 
     final newEntry = BatchHeadcountModel(
-      courseId:
-          _selectedCourseId, // Sending courseId to backend for strict relations
+      courseId: _selectedCourseId,
       courseName: _selectedCourseName!,
       semester: "Sem $_selectedSemester",
       totalStudents: _currentTotalStudents!,
@@ -199,6 +198,20 @@ class _DailyHeadcountScreenState extends State<DailyHeadcountScreen> {
     });
 
     _saveToDatabase();
+  }
+
+  void _editEntry(BatchHeadcountModel model) {
+    setState(() {
+      _selectedCourseId = model.courseId;
+      _selectedCourseName = model.courseName;
+
+      final String semString = model.semester.replaceAll(RegExp(r'[^0-9]'), '');
+      _selectedSemester = int.tryParse(semString);
+
+      _currentTotalStudents = model.totalStudents;
+      _preController.text = model.preLunch.toString();
+      _postController.text = model.postLunch.toString();
+    });
   }
 
   void _recalculateTotals() {
@@ -531,8 +544,10 @@ class _DailyHeadcountScreenState extends State<DailyHeadcountScreen> {
                             itemCount: _todayEntries.length,
                             separatorBuilder: (_, __) =>
                                 const SizedBox(height: 12),
-                            itemBuilder: (context, index) =>
-                                _BatchDisplayCard(model: _todayEntries[index]),
+                            itemBuilder: (context, index) => _BatchDisplayCard(
+                              model: _todayEntries[index],
+                              onEdit: () => _editEntry(_todayEntries[index]),
+                            ),
                           ),
                         ],
                         const SizedBox(height: 100),
@@ -971,7 +986,8 @@ class _DailyHeadcountScreenState extends State<DailyHeadcountScreen> {
 
 class _BatchDisplayCard extends StatelessWidget {
   final BatchHeadcountModel model;
-  const _BatchDisplayCard({required this.model});
+  final VoidCallback onEdit;
+  const _BatchDisplayCard({required this.model, required this.onEdit});
 
   @override
   Widget build(BuildContext context) {
@@ -1017,6 +1033,17 @@ class _BatchDisplayCard extends StatelessWidget {
               _miniBadge(model.preLunch.toString(), const Color(0xFF00D26A)),
               const SizedBox(width: 8),
               _miniBadge(model.postLunch.toString(), const Color(0xFF4F46E5)),
+              const SizedBox(width: 8),
+              IconButton(
+                onPressed: onEdit,
+                icon: const Icon(
+                  Icons.edit_rounded,
+                  color: Colors.blueAccent,
+                  size: 20,
+                ),
+                constraints: const BoxConstraints(),
+                padding: EdgeInsets.zero,
+              ),
             ],
           ),
         ],

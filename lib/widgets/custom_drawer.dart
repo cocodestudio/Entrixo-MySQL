@@ -69,11 +69,11 @@ class CustomDrawer extends ConsumerWidget {
   }
 
   Widget _buildProfileHeader(
-    BuildContext context,
-    ProfileState profileState,
-    ThemeData theme,
-    Size size,
-  ) {
+      BuildContext context,
+      ProfileState profileState,
+      ThemeData theme,
+      Size size,
+      ) {
     final bool isStudent = profileState.role == 'student';
 
     return Container(
@@ -141,8 +141,8 @@ class CustomDrawer extends ConsumerWidget {
                   child: ClipOval(
                     child: CachedNetworkImage(
                       imageUrl:
-                          (profileState.profileUrl != null &&
-                              profileState.profileUrl!.isNotEmpty)
+                      (profileState.profileUrl != null &&
+                          profileState.profileUrl!.isNotEmpty)
                           ? profileState.profileUrl!
                           : 'https://ui-avatars.com/api/?name=${Uri.encodeComponent(profileState.name.isEmpty ? (isStudent ? "Student" : "Admin") : profileState.name)}&background=6366F1&color=fff&size=256',
                       fit: BoxFit.cover,
@@ -211,8 +211,6 @@ class CustomDrawer extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 4),
-
-          // Role-based rendering: Roll Number sirf Student ko dikhega
           if (isStudent) ...[
             Text(
               "Roll No: ${profileState.rollNumber}",
@@ -225,7 +223,6 @@ class CustomDrawer extends ConsumerWidget {
             ),
             const SizedBox(height: 12),
           ] else ...[
-            // Admin ke liye chhota sa badge ya spacing
             Container(
               margin: const EdgeInsets.only(top: 4, bottom: 8),
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -244,7 +241,6 @@ class CustomDrawer extends ConsumerWidget {
               ),
             ),
           ],
-
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             decoration: BoxDecoration(
@@ -277,6 +273,21 @@ class CustomDrawer extends ConsumerWidget {
               ],
             ),
           ),
+          if (isStudent) ...[
+            const SizedBox(height: 8),
+            Text(
+              "${profileState.courseName} • Semester ${profileState.currentSemester}",
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                color: const Color(0xFF1A1A1A).withOpacity(0.6),
+                letterSpacing: 0.2,
+              ),
+            ),
+          ],
         ],
       ),
     );

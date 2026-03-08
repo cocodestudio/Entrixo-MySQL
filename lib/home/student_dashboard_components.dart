@@ -509,6 +509,26 @@ class NextSessionSection extends StatelessWidget {
                             fontWeight: FontWeight.w600,
                           ),
                         ),
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.person_outline_rounded,
+                              size: 12,
+                              color: Colors.white.withOpacity(0.5),
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              session['faculty_name'] ?? 'N/A',
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(0.7),
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                                fontStyle: FontStyle.italic,
+                              ),
+                            ),
+                          ],
+                        ),
                       ],
                     ),
                     Row(

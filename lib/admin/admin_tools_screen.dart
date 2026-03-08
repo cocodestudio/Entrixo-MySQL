@@ -4,12 +4,12 @@ import 'package:entrixo/admin/admin_manual_attendance.dart';
 import 'package:entrixo/admin/daily_headcount_screen.dart';
 import 'package:entrixo/admin/lab_management_screen.dart';
 import 'package:entrixo/admin/manage_faculty_screen.dart';
-import 'package:entrixo/admin/qr_generator_screen.dart';
 import 'package:entrixo/admin/resource_upload_screen.dart';
 import 'package:entrixo/admin/session_management_screen.dart';
 import 'package:entrixo/admin/student_list_screen.dart';
 import 'package:flutter/material.dart';
 import 'academic_setup_screen.dart';
+import 'bulk_promotion_screen.dart';
 
 class AdminToolsScreen extends StatelessWidget {
   const AdminToolsScreen({super.key});
@@ -141,6 +141,21 @@ class AdminToolsScreen extends StatelessWidget {
             ),
           ),
 
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+            sliver: SliverToBoxAdapter(
+              child: _PromotionUniqueCard(
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const BulkPromotionScreen(),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(24, 16, 24, 120),
             sliver: SliverGrid(
@@ -640,6 +655,131 @@ class _WideActionCard extends StatelessWidget {
                         ),
                       ],
                     ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PromotionUniqueCard extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _PromotionUniqueCard({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 90,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(30),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF1e272e), Color(0xFF485460)],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF1e272e).withOpacity(0.3),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(30),
+        child: Stack(
+          children: [
+            // Abstract Background Shapes for Unique Look
+            Positioned(
+              right: -20,
+              top: -20,
+              child: Container(
+                width: 150,
+                height: 150,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withOpacity(0.05),
+                ),
+              ),
+            ),
+            Positioned(
+              left: -30,
+              bottom: -30,
+              child: Icon(
+                Icons.auto_awesome_motion_rounded,
+                size: 140,
+                color: Colors.white.withOpacity(0.05),
+              ),
+            ),
+            // Content
+            Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: onTap,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Row(
+                    children: [
+                      // Icon with a glowing effect
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: Colors.orangeAccent.withOpacity(0.2),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.orangeAccent.withOpacity(0.4), width: 2),
+                        ),
+                        child: const Icon(
+                          Icons.upgrade_rounded,
+                          color: Colors.orangeAccent,
+                          size: 20,
+                        ),
+                      ),
+                      const SizedBox(width: 20),
+                      Expanded(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              "Batch Promotion",
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              "Upgrade students to next semester",
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(0.7),
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // Action Arrow
+                      Container(
+                        width: 30,
+                        height: 30,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(15),
+                        ),
+                        child: const Icon(
+                          Icons.chevron_right_rounded,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),

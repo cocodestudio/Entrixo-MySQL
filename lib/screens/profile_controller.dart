@@ -17,6 +17,8 @@ class ProfileState {
   final String role;
   final String phoneNumber;
   final String rollNumber;
+  final String courseName;
+  final String currentSemester;
 
   ProfileState({
     this.isLoading = false,
@@ -27,6 +29,8 @@ class ProfileState {
     this.role = 'student',
     this.phoneNumber = '',
     this.rollNumber = '',
+    this.courseName = '',
+    this.currentSemester = '',
   });
 
   ProfileState copyWith({
@@ -38,6 +42,8 @@ class ProfileState {
     String? role,
     String? phoneNumber,
     String? rollNumber,
+    String? courseName,
+    String? currentSemester,
     bool clearPickedImage = false,
   }) {
     return ProfileState(
@@ -49,11 +55,15 @@ class ProfileState {
       role: role ?? this.role,
       phoneNumber: phoneNumber ?? this.phoneNumber,
       rollNumber: rollNumber ?? this.rollNumber,
+      courseName: courseName ?? this.courseName,
+      currentSemester: currentSemester ?? this.currentSemester,
     );
   }
 }
 
-final userProfileProvider = FutureProvider.autoDispose<ProfileState>((ref) async {
+final userProfileProvider = FutureProvider.autoDispose<ProfileState>((
+  ref,
+) async {
   final prefs = await SharedPreferences.getInstance();
   final token = prefs.getString('auth_token');
   if (token == null || token.isEmpty) return ProfileState(role: 'guest');
@@ -73,6 +83,8 @@ final userProfileProvider = FutureProvider.autoDispose<ProfileState>((ref) async
         role: data['role'].toString().toLowerCase().trim(),
         phoneNumber: data['phone_number'] ?? 'N/A',
         rollNumber: data['roll_number'] ?? 'N/A',
+        courseName: data['course_name']?.toString() ?? 'No Course',
+        currentSemester: data['current_semester']?.toString() ?? '0',
       );
     }
     throw Exception("Error");
@@ -81,10 +93,11 @@ final userProfileProvider = FutureProvider.autoDispose<ProfileState>((ref) async
   }
 });
 
-final profileControllerProvider = StateNotifierProvider<ProfileController, ProfileState>((ref) {
-  final asyncData = ref.watch(userProfileProvider);
-  return ProfileController(ref, asyncData.value ?? ProfileState());
-});
+final profileControllerProvider =
+    StateNotifierProvider<ProfileController, ProfileState>((ref) {
+      final asyncData = ref.watch(userProfileProvider);
+      return ProfileController(ref, asyncData.value ?? ProfileState());
+    });
 
 class ProfileController extends StateNotifier<ProfileState> {
   final Ref _ref;
@@ -93,7 +106,10 @@ class ProfileController extends StateNotifier<ProfileState> {
   final _picker = ImagePicker();
 
   Future<void> pickImage() async {
-    final XFile? image = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 70);
+    final XFile? image = await _picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 70,
+    );
     if (image != null) {
       state = state.copyWith(pickedImage: File(image.path));
     }
@@ -110,13 +126,24 @@ class ProfileController extends StateNotifier<ProfileState> {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('auth_token');
 
-      var request = http.MultipartRequest('POST', Uri.parse("${ApiConfig.baseUrl}/update-profile"));
-      request.headers.addAll({'Authorization': 'Bearer $token', 'Accept': 'application/json'});
+      var request = http.MultipartRequest(
+        'POST',
+        Uri.parse("${ApiConfig.baseUrl}/update-profile"),
+      );
+      request.headers.addAll({
+        'Authorization': 'Bearer $token',
+        'Accept': 'application/json',
+      });
       request.fields['name'] = newName;
       request.fields['email'] = newEmail;
 
       if (state.pickedImage != null) {
-        request.files.add(await http.MultipartFile.fromPath('profile_pic', state.pickedImage!.path));
+        request.files.add(
+          await http.MultipartFile.fromPath(
+            'profile_pic',
+            state.pickedImage!.path,
+          ),
+        );
       }
 
       final response = await http.Response.fromStream(await request.send());
@@ -124,8 +151,6 @@ class ProfileController extends StateNotifier<ProfileState> {
       if (response.statusCode == 200 || response.statusCode == 201) {
         final data = json.decode(response.body);
         final String newUrl = data['user']['profile_pic'];
-        print(newUrl);
-        print(data['profile_pic']);
 
         state = state.copyWith(
           isLoading: false,

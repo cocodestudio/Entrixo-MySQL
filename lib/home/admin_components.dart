@@ -326,7 +326,7 @@ class _ActiveLabCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    String facultyName = session['faculty_name'] ?? "Unknown Faculty";
+    String facultyName = session['faculty_name'] ?? "N/A";
     String courseName = session['courseName'] ?? "Course";
 
     return Container(

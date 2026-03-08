@@ -51,6 +51,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     }
 
     final bool isStudent = state.role == 'student';
+    final bool isAdmin = state.role == 'admin';
 
     return Scaffold(
       backgroundColor: const Color(0xFFF7F8FA),
@@ -142,6 +143,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                     label: "Full Name",
                     icon: Icons.person_outline_rounded,
                     theme: theme,
+                    isReadOnly: isStudent,
                   ),
                   const SizedBox(height: 20),
                   _buildTextField(
@@ -150,6 +152,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                     icon: Icons.email_outlined,
                     theme: theme,
                     isEmail: true,
+                    isReadOnly: isAdmin,
                   ),
                   const SizedBox(height: 20),
                   if (isStudent) ...[
@@ -232,7 +235,11 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
 
   Widget _buildProfileImage(ProfileState state) {
     if (state.pickedImage != null) {
-      return Image.file(state.pickedImage!, fit: BoxFit.cover, key: UniqueKey());
+      return Image.file(
+        state.pickedImage!,
+        fit: BoxFit.cover,
+        key: UniqueKey(),
+      );
     }
 
     if (state.profileUrl != null && state.profileUrl!.isNotEmpty) {
@@ -244,7 +251,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           if (loadingProgress == null) return child;
           return const Center(child: CircularProgressIndicator());
         },
-        errorBuilder: (context, error, stackTrace) => _fallbackAvatar(state.name),
+        errorBuilder: (context, error, stackTrace) =>
+            _fallbackAvatar(state.name),
       );
     }
 
@@ -296,8 +304,9 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             ),
             decoration: InputDecoration(
               prefixIcon: Icon(
-                icon,
+                isReadOnly ? Icons.lock_outline_rounded : icon,
                 color: theme.primaryColor.withOpacity(0.6),
+                size: 20,
               ),
               border: InputBorder.none,
               contentPadding: const EdgeInsets.symmetric(
