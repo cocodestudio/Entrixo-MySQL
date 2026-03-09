@@ -419,7 +419,7 @@ class _AdminDailyAttendanceViewState
   Widget _buildFilters() {
     return Container(
       color: Colors.white,
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+      padding: const EdgeInsets.fromLTRB(20, 10, 20, 16),
       child: Column(
         children: [
           GestureDetector(

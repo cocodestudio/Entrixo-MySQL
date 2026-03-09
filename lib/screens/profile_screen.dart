@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -44,7 +45,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
 
     if (!_isInitialized && state.name.isNotEmpty) {
       _nameController.text = state.name;
-      _emailController.text = state.email;
+      _emailController.text = state.email ?? "";
       _phoneController.text = state.phoneNumber;
       _rollController.text = state.rollNumber;
       _isInitialized = true;
@@ -235,27 +236,18 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
 
   Widget _buildProfileImage(ProfileState state) {
     if (state.pickedImage != null) {
-      return Image.file(
-        state.pickedImage!,
-        fit: BoxFit.cover,
-        key: UniqueKey(),
-      );
+      return Image.file(state.pickedImage!, fit: BoxFit.cover);
     }
 
     if (state.profileUrl != null && state.profileUrl!.isNotEmpty) {
-      return Image.network(
-        state.profileUrl!,
-        key: ValueKey(state.profileUrl),
+      return CachedNetworkImage(
+        imageUrl: state.profileUrl!,
         fit: BoxFit.cover,
-        loadingBuilder: (context, child, loadingProgress) {
-          if (loadingProgress == null) return child;
-          return const Center(child: CircularProgressIndicator());
-        },
-        errorBuilder: (context, error, stackTrace) =>
-            _fallbackAvatar(state.name),
+        placeholder: (context, url) =>
+            const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+        errorWidget: (context, url, error) => _fallbackAvatar(state.name),
       );
     }
-
     return _fallbackAvatar(state.name);
   }
 

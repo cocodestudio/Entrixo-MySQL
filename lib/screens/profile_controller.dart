@@ -133,6 +133,7 @@ class ProfileController extends StateNotifier<ProfileState> {
       request.headers.addAll({
         'Authorization': 'Bearer $token',
         'Accept': 'application/json',
+        'Content-Type': 'multipart/form-data',
       });
       request.fields['name'] = newName;
       request.fields['email'] = newEmail;

@@ -565,7 +565,7 @@ class _DailyHeadcountScreenState extends State<DailyHeadcountScreen> {
     return Container(
       width: double.infinity,
       color: Colors.white,
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
       child: GestureDetector(
         onTap: () async {
           final DateTime? picked = await showDatePicker(

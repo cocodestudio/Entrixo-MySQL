@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../admin/admin_tools_screen.dart';
 import '../screens/profile_controller.dart';
+import '../utils/ad_banner_widget.dart';
 import '../utils/check_update.dart';
 import '../utils/notification_service.dart';
 import '../widgets/custom_drawer.dart';
@@ -176,6 +177,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                     const ActiveLabsCarousel(),
                     const SizedBox(height: 10),
                     const AbsentAlertsList(),
+                    const ShimmerBannerAd(),
                     const SizedBox(height: 140),
                   ],
                 ),
@@ -217,6 +219,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                 NextSessionSection(
                   theme: theme,
                   sessions: studentState.upcomingSessions,
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 24),
+                  child: ShimmerBannerAd(),
                 ),
               ],
             ),

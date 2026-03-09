@@ -82,7 +82,6 @@ class _AddStudentScreenState extends State<AddStudentScreen> {
 
     if (_nameController.text.trim().isEmpty ||
         _rollNoController.text.trim().isEmpty ||
-        _emailController.text.trim().isEmpty ||
         _phoneController.text.trim().isEmpty ||
         _selectedCourseId == null ||
         _selectedSemester == null) {
@@ -94,14 +93,17 @@ class _AddStudentScreenState extends State<AddStudentScreen> {
       return;
     }
 
-    final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
-    if (!emailRegex.hasMatch(_emailController.text.trim())) {
-      CustomToast.show(
-        context,
-        "Please enter a valid email address",
-        isError: true,
-      );
-      return;
+    final emailText = _emailController.text.trim();
+    if (emailText.isNotEmpty) {
+      final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
+      if (!emailRegex.hasMatch(emailText)) {
+        CustomToast.show(
+          context,
+          "Please enter a valid email address",
+          isError: true,
+        );
+        return;
+      }
     }
 
     if (_phoneController.text.trim().length < 10) {

@@ -1,9 +1,12 @@
 import 'dart:async';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../auth/login_screen.dart';
 import '../home/dashboard_screen.dart';
+import '../utils/notification_service.dart';
 import 'onboarding_screen.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -46,6 +49,12 @@ class _SplashScreenState extends State<SplashScreen>
     Widget nextScreen = const LoginScreen();
 
     try {
+      await Firebase.initializeApp();
+      await Future.wait([
+        MobileAds.instance.initialize(),
+        NotificationService().initialize(),
+      ]);
+
       final prefs = await SharedPreferences.getInstance();
       final bool isFirstTime = prefs.getBool('isFirstTime') ?? true;
 
@@ -53,7 +62,6 @@ class _SplashScreenState extends State<SplashScreen>
         nextScreen = const OnboardingScreen();
       } else {
         final String? token = prefs.getString('auth_token');
-
         if (token != null && token.isNotEmpty) {
           nextScreen = await _determineUserDestination(prefs);
         } else {
@@ -61,6 +69,7 @@ class _SplashScreenState extends State<SplashScreen>
         }
       }
     } catch (e) {
+      debugPrint("Initialization error: $e");
       nextScreen = const LoginScreen();
     } finally {
       _navigate(nextScreen, startTime);

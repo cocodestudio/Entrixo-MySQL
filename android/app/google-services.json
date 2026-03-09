@@ -1,52 +1,26 @@
 {
   "project_info": {
-    "project_number": "227829765725",
-    "project_id": "entrixo",
-    "storage_bucket": "entrixo.firebasestorage.app"
+    "project_number": "91368266882",
+    "project_id": "enrixo-935ea",
+    "storage_bucket": "enrixo-935ea.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:227829765725:android:a2ae02b95a25c8c0211fb4",
+        "mobilesdk_app_id": "1:91368266882:android:2f0d9407bb5685e9ba289b",
         "android_client_info": {
           "package_name": "com.cocode.entrixo"
         }
       },
-      "oauth_client": [
-        {
-          "client_id": "227829765725-fp895d71k3fi9evrbpijlqndjgavaaob.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "com.cocode.entrixo",
-            "certificate_hash": "fa37fa3dde596bee0331a823098dc98e379d691e"
-          }
-        },
-        {
-          "client_id": "227829765725-g1dtvbsloscb9s1hetsssaa2rdbnjen2.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "com.cocode.entrixo",
-            "certificate_hash": "b200aeb5adf5e4a586467727882f82d9bfeabc4a"
-          }
-        },
-        {
-          "client_id": "227829765725-r0n2tcok9b9kmgj08ouj4s83k14a1t7h.apps.googleusercontent.com",
-          "client_type": 3
-        }
-      ],
+      "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyC6HO8tSdfnG6UzBVNI33WSGfn_lYidb2E"
+          "current_key": "AIzaSyCV2fuOyIElO74kej422W4KU2GUQk95oVk"
         }
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": [
-            {
-              "client_id": "227829765725-r0n2tcok9b9kmgj08ouj4s83k14a1t7h.apps.googleusercontent.com",
-              "client_type": 3
-            }
-          ]
+          "other_platform_oauth_client": []
         }
       }
     }

@@ -350,7 +350,7 @@ class _BulkPromotionScreenState extends State<BulkPromotionScreen> {
           onPressed: () => Navigator.pop(context),
         ),
         title: Text(
-          "Bulk Promotion",
+          "Promotion",
           style: theme.textTheme.titleLarge?.copyWith(
             fontWeight: FontWeight.w800,
             fontSize: 16,
@@ -359,9 +359,8 @@ class _BulkPromotionScreenState extends State<BulkPromotionScreen> {
       ),
       body: Column(
         children: [
-          // FILTERS SECTION
           Container(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+            padding: const EdgeInsets.fromLTRB(20, 10, 20, 16),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: const BorderRadius.vertical(

@@ -3,7 +3,7 @@ description: "A new Flutter project."
 
 publish_to: 'none'
 
-version: 1.0.0+6
+version: 1.0.1+7
 
 environment:
   sdk: ^3.10.4
@@ -44,7 +44,7 @@ dependencies:
   in_app_update: ^4.2.5
   intl: ^0.20.2
   flutter_local_notifications: ^17.2.2
-
+  google_mobile_ads: ^7.0.0
 
 dependency_overrides:
   archive: ^3.6.1

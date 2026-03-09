@@ -21,7 +21,7 @@ class _AboutScreenState extends State<AboutScreen> {
     final info = await PackageInfo.fromPlatform();
     if (mounted) {
       setState(() {
-        _version = 'Version ${info.version} (Build ${info.buildNumber})';
+        _version = 'Version ${info.version}';
       });
     }
   }

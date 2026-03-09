@@ -1081,7 +1081,7 @@ class _SessionManagementScreenState extends State<SessionManagementScreen> {
           Container(
             width: double.infinity,
             color: Colors.white,
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
             child: GestureDetector(
               onTap: _showYearSelector,
               child: Container(
