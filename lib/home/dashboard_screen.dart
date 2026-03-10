@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_mobile_ads/google_mobile_ads.dart';
 import '../admin/admin_tools_screen.dart';
 import '../screens/profile_controller.dart';
 import '../utils/ad_banner_widget.dart';
@@ -26,10 +27,23 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
+    Future.microtask(() async {
+      _initializeHeavySDKs();
+    });
+  }
+
+  Future<void> _initializeHeavySDKs() async {
+    try {
+      await Future.wait([
+        MobileAds.instance.initialize(),
+        NotificationService().initialize(),
+      ]);
       AppUpdateService.checkForUpdate();
       await NotificationService().requestPermission();
-    });
+      debugPrint("SDKs Initialized in Background");
+    } catch (e) {
+      debugPrint("SDK Init Error: $e");
+    }
   }
 
   @override

@@ -46,42 +46,28 @@ class _SplashScreenState extends State<SplashScreen>
 
   Future<void> _initAppFlow() async {
     final startTime = DateTime.now();
-    Widget nextScreen = const LoginScreen();
 
     try {
-      await Firebase.initializeApp();
-      await Future.wait([
-        MobileAds.instance.initialize(),
-        NotificationService().initialize(),
-      ]);
-
       final prefs = await SharedPreferences.getInstance();
+
       final bool isFirstTime = prefs.getBool('isFirstTime') ?? true;
+      final String? token = prefs.getString('auth_token');
+
+      Widget nextScreen;
 
       if (isFirstTime) {
         nextScreen = const OnboardingScreen();
+      } else if (token != null && token.isNotEmpty) {
+        nextScreen = const DashboardScreen();
       } else {
-        final String? token = prefs.getString('auth_token');
-        if (token != null && token.isNotEmpty) {
-          nextScreen = await _determineUserDestination(prefs);
-        } else {
-          nextScreen = const LoginScreen();
-        }
+        nextScreen = const LoginScreen();
       }
-    } catch (e) {
-      debugPrint("Initialization error: $e");
-      nextScreen = const LoginScreen();
-    } finally {
-      _navigate(nextScreen, startTime);
-    }
-  }
 
-  Future<Widget> _determineUserDestination(SharedPreferences prefs) async {
-    final String? token = prefs.getString('auth_token');
-    if (token != null && token.isNotEmpty) {
-      return const DashboardScreen();
+      _navigate(nextScreen, startTime);
+    } catch (e) {
+      debugPrint("Splash Error: $e");
+      _navigate(const LoginScreen(), startTime);
     }
-    return const LoginScreen();
   }
 
   void _navigate(Widget nextScreen, DateTime startTime) {
