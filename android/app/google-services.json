@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "91368266882",
-    "project_id": "enrixo-935ea",
-    "storage_bucket": "enrixo-935ea.firebasestorage.app"
+    "project_number": "1054202923984",
+    "project_id": "entrixo-48c16",
+    "storage_bucket": "entrixo-48c16.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:91368266882:android:2f0d9407bb5685e9ba289b",
+        "mobilesdk_app_id": "1:1054202923984:android:512a910675f03b85a547d5",
         "android_client_info": {
           "package_name": "com.cocode.entrixo"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyCV2fuOyIElO74kej422W4KU2GUQk95oVk"
+          "current_key": "AIzaSyA2JdwQ-oXw6j9L2Q3yYTsxoiPsz-9kris"
         }
       ],
       "services": {

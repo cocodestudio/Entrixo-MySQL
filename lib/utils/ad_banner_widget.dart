@@ -24,7 +24,7 @@ class _ShimmerBannerAdState extends State<ShimmerBannerAd> {
 
   void _loadAd() {
     _bannerAd = BannerAd(
-      adUnitId: 'ca-app-pub-3180059107995064/3719483920',
+      adUnitId: 'ca-app-pub-7486897977239337/6950977803',
       request: const AdRequest(),
       size: _adSize,
       listener: BannerAdListener(
